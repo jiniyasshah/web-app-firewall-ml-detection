@@ -1,0 +1,36 @@
+services:
+  gateway:
+    build: ./gateway # Path to Go gateway code
+    container_name: go_gateway
+    ports:
+      - "8080:8080" # Expose port 8080 for the gateway
+    depends_on:
+      - scorer
+    environment:
+      - SCORER_URL=http://scorer:8000 # Python scorer service URL
+
+  scorer:
+    build: ./ml_scorer # Path to Python ML scorer code
+    container_name: python_scorer
+    ports:
+      - "8000:8000" # Expose port 8000 for the ML scorer
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    environment:
+      - DATASET_PATH=/app/data # Example environment variable (adjust as necessary)
+    volumes:
+      - ./ml_scorer/data:/app/data # Map local data directory to container
+
+  origin:
+    image: bkimminich/juice-shop # Using Juice Shop as an example HTTP origin server
+    container_name: origin_server
+    ports:
+      - "3000:3000" # Expose port 3000 for Juice Shop
+    environment:
+      - NODE_ENV=production # Running in production mode for Juice Shop
+    restart: always # Automatically restart if the container stops
+
