@@ -12,8 +12,8 @@ services:
       - ./certs:/app/certs
 
   origin:
-    build: ./ml_scorer # Path to the Python server code
-    container_name: ml_scorer
+    build: ./test_server # Path to the Python server code
+    container_name: test_server
     ports:
       - "3000:3000" # Expose port 3000 for the Python server
     restart: unless-stopped
