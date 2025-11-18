@@ -1,16 +1,16 @@
 services:
-  gateway:
+  # Go Reverse Proxy Service
+  go_gateway:
     build: ./gateway # Path to Go gateway code
     container_name: go_gateway
     ports:
       - "8080:8080" # Expose port 8080 for the Go reverse proxy
     depends_on:
-      - origin # Now depends on the Python server (instead of scorer)
+      - origin # Depends on the Python server (instead of scorer)
     environment:
       - ORIGIN_URL=http://origin:3000 # The Python server will be the origin for the proxy
-    volumes:
-      - ./certs:/app/certs
 
+  # Python Backend Service
   origin:
     build: ./test_server # Path to the Python server code
     container_name: test_server
@@ -22,3 +22,18 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # NGINX Reverse Proxy Service
+  nginx:
+    image: nginx:latest # Use the latest NGINX image
+    container_name: nginx_reverse_proxy
+    ports:
+      - "80:80" # Expose port 80 for HTTP
+      - "443:443" # Expose port 443 for HTTPS
+    depends_on:
+      - go_gateway # NGINX depends on the Go reverse proxy service
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf # Mount your custom NGINX config file
+      - ./certs:/etc/ssl/certs
+      - ./certs:/etc/ssl/private
+    restart: always
