@@ -5,7 +5,7 @@ import (
 	"log"
 	"regexp"
 	"time"
-	"web-app-firewall-ml-detection/internal/detector" // Import your new package
+	"web-app-firewall-ml-detection/internal/detector"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
