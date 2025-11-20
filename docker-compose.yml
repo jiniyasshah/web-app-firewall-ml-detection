@@ -8,6 +8,7 @@ services:
     depends_on:
       - origin # Depends on the Python server (instead of scorer)
     environment:
+      - MONGO_URI=${MONGO_URI}
       - ORIGIN_URL=http://origin:3000 # The Python server will be the origin for the proxy
 
   # Python Backend Service
