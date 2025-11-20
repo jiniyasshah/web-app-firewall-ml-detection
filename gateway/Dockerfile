@@ -11,7 +11,7 @@ COPY . .
 RUN go mod tidy
 
 # Build the Go binary
-RUN go build -o main .
+RUN go build -o main ./cmd/server/main.go
 
 # Expose the port the app runs on
 EXPOSE 8080
