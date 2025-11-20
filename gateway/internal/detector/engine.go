@@ -5,22 +5,33 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 )
 
 // CheckRequest is the main entry point for the WAF engine
 func CheckRequest(r *http.Request, rules []WAFRule, isRateLimited bool) (int, []string, bool) {
-	totalScore := 0
-	var triggeredTags []string
-	forceBlock := false
+    totalScore := 0
+    var triggeredTags []string
+    forceBlock := false
 
-	// 1. Read Body Safely (and restore it)
-	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-	
-	// 2. Construct Context Variables once
-	combinedPayload := r.URL.Path + " " + r.URL.RawQuery + " " + string(bodyBytes)
-	paramCount := len(r.URL.Query())
-	bodyLen := len(bodyBytes)
+    // 1. Read Body
+    bodyBytes, _ := io.ReadAll(r.Body)
+    r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+    
+    // 2. DECODE & CONSTRUCT PAYLOAD (The Fix)
+    // We decode the query to turn "%7B" back into "{" so regex matches
+    decodedPath, _ := url.QueryUnescape(r.URL.Path)
+    decodedQuery, _ := url.QueryUnescape(r.URL.RawQuery)
+    
+    // We combine BOTH the Raw and Decoded versions to catch everything
+    // Some attacks hide in Raw (e.g., double encoding), some in Decoded.
+    // For this simple WAF, checking the Decoded version is most important.
+    combinedPayload := decodedPath + " " + decodedQuery + " " + string(bodyBytes)
+    
+    paramCount := len(r.URL.Query())
+    bodyLen := len(bodyBytes)
+
+    // 3. Iterate Rules ... (Rest of the code is the same)
 
 	// 3. Iterate Rules
 	for _, rule := range rules {
