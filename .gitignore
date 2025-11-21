@@ -32,3 +32,6 @@ go.work.sum
 # .vscode/
 *.crt
 *.key
+
+#ml_scorer (Python virtual environment)
+venv/

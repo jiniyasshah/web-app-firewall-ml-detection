@@ -1,1 +1,6 @@
 # web-app-firewall-ml-detection
+
+## Run all the containers with the commands:
+`docker compose build`
+
+`docker compose up`
