@@ -25,7 +25,8 @@ func LoadRules(client *mongo.Client, dbName, collName string) ([]detector.WAFRul
 	defer cancel()
 
 	collection := client.Database(dbName).Collection(collName)
-	cursor, err := collection.Find(ctx, bson.M{"enabled": true})
+	opts := options.Find().SetSort(bson.D{{Key: "priority", Value: -1}})
+	cursor, err := collection.Find(ctx, bson.M{"enabled": true}, opts)
 	if err != nil { return nil, err }
 	defer cursor.Close(ctx)
 
