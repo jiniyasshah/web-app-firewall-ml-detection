@@ -1,40 +1,55 @@
 services:
   # Go Reverse Proxy Service
   go_gateway:
-    build: ./gateway # Path to Go gateway code
+    build: ./gateway
     container_name: go_gateway
     ports:
-      - "8080:8080" # Expose port 8080 for the Go reverse proxy
+      - "8080:8080"
     depends_on:
-      - origin # Depends on the Python server (instead of scorer)
+      origin:
+        condition: service_healthy # Wait for Python to be ready
     environment:
       - MONGO_URI=${MONGO_URI}
-      - ORIGIN_URL=http://origin:3000 # The Python server will be the origin for the proxy
+      - ORIGIN_URL=http://origin:3000
+      - SCORER_URL=http://ml_scorer:8000
 
   # Python Backend Service
   origin:
-    build: ./test_server # Path to the Python server code
+    build: ./test_server
     container_name: test_server
     ports:
-      - "3000:3000" # Expose port 3000 for the Python server
+      - "3000:3000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+      # Switched to wget for better compatibility with slim images
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
 
   # NGINX Reverse Proxy Service
   nginx:
-    image: nginx:latest # Use the latest NGINX image
+    image: nginx:latest
     container_name: nginx_reverse_proxy
     ports:
-      - "80:80" # Expose port 80 for HTTP
-      - "443:443" # Expose port 443 for HTTPS
+      - "80:80"
+      - "443:443"
     depends_on:
-      - go_gateway # NGINX depends on the Go reverse proxy service
+      - go_gateway
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf # Mount your custom NGINX config file
+      # Changed to default.conf to avoid breaking root config
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
       - ./certs:/etc/ssl/certs
-      - ./certs:/etc/ssl/private
+      # Removed redundant mount unless you have specific structure requirements
     restart: always
+
+  ml_scorer:
+    build: ./ml_scorer
+    container_name: ml_scorer
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
