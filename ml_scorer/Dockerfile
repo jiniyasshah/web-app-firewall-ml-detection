@@ -1,20 +1,17 @@
-# Use official Python image
-FROM python:3.12-slim
+FROM python:3.14-slim
 
-# Set work directory inside the container
 WORKDIR /app
 
-# Copy requirement file if you have it
-COPY requirements.txt /app/
+# Install libs
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Python dependencies
-RUN pip install -r requirements.txt
+# Copy code
+COPY . .
 
-# Copy the entire Django project
-COPY . /app/
+# Train the model immediately during build
+RUN python train.py
 
-# Expose port 8000 for Django
+# Start API
 EXPOSE 8000
-
-# Default command when the container starts
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+CMD ["uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8000"]
