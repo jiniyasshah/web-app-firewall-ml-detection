@@ -1,55 +1,73 @@
 services:
   # Go Reverse Proxy Service
+
   go_gateway:
-    build: ./gateway
+    build: ./gateway # Path to Go gateway code
+
     container_name: go_gateway
+
     ports:
-      - "8080:8080"
+      - "8080:8080" # Expose port 8080 for the Go reverse proxy
+
     depends_on:
-      origin:
-        condition: service_healthy # Wait for Python to be ready
+      - origin # Depends on the Python server (instead of scorer)
+
     environment:
       - MONGO_URI=${MONGO_URI}
-      - ORIGIN_URL=http://origin:3000
-      - SCORER_URL=http://ml_scorer:8000
+
+      - ORIGIN_URL=http://origin:3000 # The Python server will be the origin for the proxy
 
   # Python Backend Service
+
   origin:
-    build: ./test_server
+    build: ./test_server # Path to the Python server code
+
     container_name: test_server
+
     ports:
-      - "3000:3000"
+      - "3000:3000" # Expose port 3000 for the Python server
+
     restart: unless-stopped
+
     healthcheck:
-      # Switched to wget for better compatibility with slim images
-      test:
-        [
-          "CMD-SHELL",
-          "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1",
-        ]
+      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+
       interval: 30s
+
       timeout: 5s
+
       retries: 3
 
   # NGINX Reverse Proxy Service
+
   nginx:
-    image: nginx:latest
+    image: nginx:latest # Use the latest NGINX image
+
     container_name: nginx_reverse_proxy
+
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:80" # Expose port 80 for HTTP
+
+      - "443:443" # Expose port 443 for HTTPS
+
     depends_on:
-      - go_gateway
+      - go_gateway # NGINX depends on the Go reverse proxy service
+
     volumes:
-      # Changed to default.conf to avoid breaking root config
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx.conf:/etc/nginx/nginx.conf # Mount your custom NGINX config file
+
       - ./certs:/etc/ssl/certs
-      # Removed redundant mount unless you have specific structure requirements
+
+      - ./certs:/etc/ssl/private
+
     restart: always
 
   ml_scorer:
     build: ./ml_scorer
+
     container_name: ml_scorer
+
     ports:
       - "8000:8000"
+
     restart: unless-stopped
