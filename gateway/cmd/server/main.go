@@ -13,6 +13,7 @@ import (
 	"web-app-firewall-ml-detection/internal/database"
 	"web-app-firewall-ml-detection/internal/detector"
 	"web-app-firewall-ml-detection/internal/limiter"
+	"web-app-firewall-ml-detection/internal/logger"
 )
 
 func main() {
@@ -46,6 +47,7 @@ func main() {
 		log.Printf("Warning: Rules DB error: %v", err)
 	}
 	log.Printf("WAF Engine Ready: %d rules loaded", len(rules))
+	logger.Init(client, "waf")
 
 	// 3. INIT COMPONENTS
 	originURL, _ := url.Parse(origin)
@@ -54,7 +56,7 @@ func main() {
 	// Limit: 100 requests per 1 Minute
 	rateLimiter := limiter.New(100, 1*time.Minute)
 
-	// 4. REQUEST HANDLER
+// 4. REQUEST HANDLER
 	wafHandler := func(w http.ResponseWriter, r *http.Request) {
 		// A. Clean IP
 		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
@@ -62,34 +64,36 @@ func main() {
 			clientIP = r.RemoteAddr
 		}
 
-		// B. Rate Limit Check (FIXED: Call once, use variable)
+		// B. Rate Limit Check
 		limitReached := rateLimiter.IsRateLimited(clientIP)
 
-		// Optional: Block immediately if you want Strict Rate Limiting
-		// if limitReached {
-		//     w.WriteHeader(http.StatusTooManyRequests)
-		//     return
-		// }
-
-		// C. Rule-Based Check (The Fast Layer)
-		// We pass 'limitReached' so the WAF rules can use it (e.g. "Block if SQLi AND RateLimited")
+		// C. Rule-Based Check
 		score, _, forceBlock := detector.CheckRequest(r, rules, limitReached)
 
 		if score >= 15 || forceBlock {
 			log.Printf("[BLOCK - RULES] IP: %s | Score: %d", clientIP, score)
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte("Blocked by WAF Rules"))
+			
+			// 1. Log to DB (Non-blocking usually, but fine here)
+			logger.LogAttack(clientIP, r.URL.Path, "Rules", "Blocked", score, 0.0)
+
+			// 2. Send HTTP Response (Order matters!)
+			w.WriteHeader(http.StatusForbidden)        // Set 403
+			w.Write([]byte("Blocked by WAF Rules"))    // Send Body
 			return
 		}
 
-		// D. ML-Based Check (The Smart Layer)
-		// Only check ML if the rules didn't already block it
+		// D. ML-Based Check
 		isAnomaly, confidence := detector.CheckML(r, mlURL)
 
 		if isAnomaly {
 			log.Printf("[BLOCK - ML] IP: %s | Confidence: %.2f", clientIP, confidence)
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte("Blocked by AI Anomaly Detection"))
+			
+			// 1. Log to DB
+			logger.LogAttack(clientIP, r.URL.Path, "ML Anomaly", "Blocked", 0, confidence)
+
+			// 2. Send HTTP Response
+			w.WriteHeader(http.StatusForbidden)               // Set 403
+			w.Write([]byte("Blocked by AI Anomaly Detection")) // Send Body
 			return
 		}
 
