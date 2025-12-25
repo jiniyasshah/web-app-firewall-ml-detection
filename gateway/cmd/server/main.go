@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -17,112 +19,115 @@ import (
 )
 
 func main() {
-	// ---------------------------------------------------------
 	// 1. CONFIGURATION
-	// ---------------------------------------------------------
 	mongoURI := os.Getenv("MONGO_URI")
-	if mongoURI == "" {
-		mongoURI = "mongodb://mongo:27017"
-	}
+	if mongoURI == "" { mongoURI = "mongodb://mongo:27017" }
 
 	origin := os.Getenv("ORIGIN_URL")
-	if origin == "" {
-		origin = "http://origin:3000"
-	}
+	if origin == "" { origin = "http://origin:3000" }
 
-	// Get the ML Service URL from docker-compose
 	mlURL := os.Getenv("ML_URL")
-	if mlURL == "" {
-		mlURL = "http://ml_scorer:8000/predict"
-	}
+	if mlURL == "" { mlURL = "http://ml_scorer:8000/predict" }
 
-	// ---------------------------------------------------------
 	// 2. CONNECT DB & LOAD RULES
-	// ---------------------------------------------------------
 	log.Println("Connecting to MongoDB...")
 	client, err := database.Connect(mongoURI)
-	if err != nil {
-		log.Fatal(err)
-	}
+	if err != nil { log.Fatal(err) }
 	defer client.Disconnect(context.Background())
 
-	// Load WAF Rules from DB
 	rules, err := database.LoadRules(client, "waf", "rules")
-	if err != nil {
-		log.Printf("Warning: Rules DB error: %v", err)
-	}
+	if err != nil { log.Printf("Warning: Rules DB error: %v", err) }
 	log.Printf("WAF Engine Ready: %d rules loaded", len(rules))
 	
-	// Initialize Logger (for storing attacks)
 	logger.Init(client, "waf")
 
-	// ---------------------------------------------------------
 	// 3. INIT COMPONENTS
-	// ---------------------------------------------------------
 	originURL, _ := url.Parse(origin)
 	proxy := httputil.NewSingleHostReverseProxy(originURL)
-	
-	// Rate Limiter: 100 requests per 1 Minute per IP
 	rateLimiter := limiter.New(100, 1*time.Minute)
 
-	// ---------------------------------------------------------
 	// 4. REQUEST HANDLER
-	// ---------------------------------------------------------
 	wafHandler := func(w http.ResponseWriter, r *http.Request) {
-		// A. Get Client IP
 		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if clientIP == "" {
-			clientIP = r.RemoteAddr
+		if clientIP == "" { clientIP = r.RemoteAddr }
+
+		// [NEW] Capture Request Body for Logger (and Engines)
+		bodyBytes, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Restore
+		
+		fullReq := logger.FullRequest{
+			Method:  r.Method,
+			URL:     r.URL.String(),
+			Headers: r.Header,
+			Body:    string(bodyBytes),
 		}
 
-		// B. Rate Limit Check
-		// We don't block immediately here; we pass this status to the Rule Engine.
-		// (Unless you want a hard block for rate limits, but usually rules handle it)
 		limitReached := rateLimiter.IsRateLimited(clientIP)
 
 		// C. Rule-Based Engine
-		// Checks regex, headers, and rate limit status against DB rules
-		ruleScore, _, ruleBlock := detector.CheckRequest(r, rules, limitReached)
+		// Returns: score, tags, block, combinedPayload
+		ruleScore, triggeredTags, ruleBlock, rulePayload := detector.CheckRequest(r, rules, limitReached)
 
-		// D. ML-Based Engine
-		// Sends payload to Python service for deep inspection
-		isAnomaly, confidence := detector.CheckML(r, mlURL)
+		var isAnomaly bool
+		var confidence float64
+		var mlTag string
+		var mlTrigger string
+
+		// [OPTIMIZATION] Skip ML if Rule Engine already decided to BLOCK
+		shouldSkipML := ruleBlock || ruleScore >= 15
+
+		if !shouldSkipML {
+			// D. ML-Based Engine
+			isAnomaly, confidence, mlTag, mlTrigger = detector.CheckML(r, mlURL)
+		}
 
 		// E. DECISION MAKER
-		// Fuse the intelligence from Rules and ML to get a final Verdict
-		verdict, reason := detector.Decide(ruleScore, ruleBlock, isAnomaly, confidence)
+		verdict, reason, source := detector.Decide(ruleScore, ruleBlock, isAnomaly, confidence)
+
+		// MERGE TAGS
+		if mlTag != "" && mlTag != "Normal" {
+			if isAnomaly || confidence > 0.60 {
+				triggeredTags = append(triggeredTags, mlTag)
+			}
+		}
+
+		// DETERMINE TRIGGER PAYLOAD
+		// If Source is ML, use mlTrigger. If Rule, use rulePayload.
+		finalTrigger := ""
+		if source == "ML Engine" {
+			finalTrigger = mlTrigger
+		} else if source == "Rule Engine" {
+			finalTrigger = rulePayload
+		} else {
+			// Hybrid or Monitor: Use whichever is available/more interesting
+			if mlTrigger != "" {
+				finalTrigger = mlTrigger
+			} else {
+				finalTrigger = rulePayload
+			}
+		}
 
 		// F. ACTION
 		switch verdict {
 		case detector.Block:
-			log.Printf("⛔ BLOCKED IP: %s | Reason: %s | Score: %d | ML: %.2f", clientIP, reason, ruleScore, confidence)
-			
-			// Log to DB
-			logger.LogAttack(clientIP, r.URL.Path, reason, "Blocked", ruleScore, confidence)
+			log.Printf("⛔ BLOCKED IP: %s | Source: %s | Reason: %s", clientIP, source, reason)
+			logger.LogAttack(clientIP, r.URL.Path, reason, "Blocked", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
 
-			// Send 403 Forbidden
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte("WAF Blocked: " + reason))
 			return
 
 		case detector.Monitor:
-			// Log but Allow (Useful for testing or low-confidence ML)
-			log.Printf("⚠️ FLAGGED IP: %s | Reason: %s | Score: %d | ML: %.2f", clientIP, reason, ruleScore, confidence)
-			
-			// Log to DB
-			logger.LogAttack(clientIP, r.URL.Path, reason, "Flagged", ruleScore, confidence)
-			
-			// Pass to Origin
+			log.Printf("⚠️ FLAGGED IP: %s | Source: %s | Reason: %s", clientIP, source, reason)
+			logger.LogAttack(clientIP, r.URL.Path, reason, "Flagged", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
 			proxy.ServeHTTP(w, r)
 
 		case detector.Allow:
-			// Perfectly clean traffic
 			proxy.ServeHTTP(w, r)
 		}
 	}
 
 	http.HandleFunc("/", wafHandler)
-
 	log.Println("Gateway running on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }

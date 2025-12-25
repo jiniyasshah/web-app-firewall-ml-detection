@@ -10,12 +10,11 @@ app = FastAPI()
 MODEL_PATH = "waf_model.pkl"
 model = None
 
-# --- 1. Master Preprocessor (Must match train_model.py) ---
+# --- 1. Master Preprocessor ---
 def master_preprocess(text):
     if not isinstance(text, str) or not text:
         return ""
     
-    # A. Recursive Decode
     decoded = text
     for _ in range(3):
         try:
@@ -24,19 +23,12 @@ def master_preprocess(text):
             decoded = temp
         except: break
     
-    # B. Lowercase
     decoded = decoded.lower()
-    
-    # C. Space Canonicalization
     decoded = re.sub(r'\s+', ' ', decoded).strip()
-    
     return decoded
 
 # --- 2. Deep Payload Parser ---
 def dissect_payload(path, body):
-    """
-    Breaks down the Path and Body into inspectable components.
-    """
     components = {}
     
     # A. Path Analysis
@@ -89,6 +81,7 @@ def dissect_payload(path, body):
 
     return components
 
+# --- 3. Startup (Clean - relies on start.sh) ---
 @app.on_event("startup")
 def load_model():
     global model
@@ -96,49 +89,24 @@ def load_model():
         model = joblib.load(MODEL_PATH)
         print(f"✅ ML Model Loaded: {MODEL_PATH}")
     else:
-        print(f"⚠️ Model not found at {MODEL_PATH}. Prediction will fail.")
+        print(f"❌ Critical: Model not found at {MODEL_PATH}. Check start.sh logs.")
 
 class RequestData(BaseModel):
     path: str
     body: str
     length: int
 
-# --- 3. New Helper: Calculate Heuristic Boost ---
+# --- 4. Heuristic Scorer ---
 def calculate_heuristic_score(content):
-    """
-    Returns a float (0.0 to 0.5) representing how 'sketchy' the string looks
-    based on character density.
-    """
-    # 1. The 'Bad List'
     suspicious_chars = {
-        "'": 0.15,   # High risk (SQLi)
-        '"': 0.10,   # Medium risk (JSON/SQLi)
-        "<": 0.15,   # High risk (XSS)
-        ">": 0.15,   # High risk (XSS)
-        ";": 0.10,   # Command Injection
-        "--": 0.20,  # Comment bypass (Critical)
-        "(": 0.05,   # Function calls
-        ")": 0.05,
-        "$": 0.10,   # Variables
-        "`": 0.10,   # Shell exec
-        "union": 0.30, # Keywords (Bonus)
-        "select": 0.20,
-        "sleep": 0.20
+        "'": 0.15, '"': 0.10, "<": 0.15, ">": 0.15, ";": 0.10, "--": 0.20,
+        "(": 0.05, ")": 0.05, "$": 0.10, "`": 0.10, "union": 0.30, "select": 0.20
     }
-    
     score = 0.0
     content_lower = content.lower()
-    
-    # 2. Iterate and Sum
     for char, weight in suspicious_chars.items():
-        count = content_lower.count(char)
-        if count > 0:
-            # We add weight * count, but diminish returns for repeated chars to prevent explosion
-            # e.g. 5 single quotes shouldn't give 5x score, maybe 2.5x
-            added_score = (weight * count) 
-            score += added_score
-
-    # 3. Cap the heuristic boost at 0.60 (So it can't purely decide on its own unless extreme)
+        if char in content_lower:
+            score += (weight * content_lower.count(char))
     return min(score, 0.60)
 
 @app.post("/predict")
@@ -150,13 +118,14 @@ def predict(data: RequestData):
     
     max_risk_score = 0.0
     is_anomaly = False
-    
-    # --- 4. Hybrid Analysis Loop ---
+    detected_type = "Normal"
+    trigger_content = "" # [NEW] The specific string that caused the flag
+
+    # --- 5. Hybrid Analysis Loop ---
     for source, content in inspectable_items.items():
         if not content.strip(): 
             continue
             
-        # Filter: Skip short/safe
         is_short = len(content) < 4
         is_alphanum = content.replace('.', '').isalnum()
         if is_short and is_alphanum:
@@ -167,8 +136,6 @@ def predict(data: RequestData):
         probs = model.predict_proba([content])[0]
         ml_confidence = probs[list(model.classes_).index(pred_label)]
         
-        # Normalize ML Score: If pred is "Normal", risk is (1 - confidence). 
-        # If pred is "Attack", risk is confidence.
         if pred_label == "Normal":
             ml_risk = 1.0 - ml_confidence 
         else:
@@ -176,24 +143,25 @@ def predict(data: RequestData):
 
         # B. Get Heuristic Boost
         heuristic_boost = calculate_heuristic_score(content)
-        
-        # C. Calculate Final Hybrid Score
-        # Formula: Base ML + Heuristic Boost
         final_risk = ml_risk + heuristic_boost
-        
-        # Cap at 1.0
         if final_risk > 1.0: final_risk = 1.0
 
-        # D. Threshold Logic
-        # If final risk > 0.75, we consider it an attack
         if final_risk > 0.75:
             is_anomaly = True
         
-        # Track max score for reporting
+        # [UPDATED] Track max score AND the triggering content
         if final_risk > max_risk_score:
             max_risk_score = final_risk
+            # We save the content that triggered this high score
+            trigger_content = content 
+            
+            if pred_label != "Normal":
+                clean_label = pred_label.replace("malicious(", "").replace(")", "").upper()
+                detected_type = "ML_" + clean_label 
 
     return {
         "is_anomaly": is_anomaly,
-        "anomaly_score": float(max_risk_score)
+        "anomaly_score": float(max_risk_score),
+        "attack_type": detected_type,
+        "trigger_content": trigger_content # [NEW] Return this to Go
     }

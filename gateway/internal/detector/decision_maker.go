@@ -9,43 +9,32 @@ const (
 )
 
 // Decide centralizes the blocking logic
-func Decide(ruleScore int, ruleBlock bool, mlAnomaly bool, mlConfidence float64) (Verdict, string) {
+// Returns: (Verdict, Reason, Source)
+// Source indicates who made the decision: "Rule Engine", "ML Engine", or "Hybrid"
+func Decide(ruleScore int, ruleBlock bool, mlAnomaly bool, mlConfidence float64) (Verdict, string, string) {
 	// ------------------------------------------
 	// 1. Critical Rules (The "Must Block" Layer)
 	// ------------------------------------------
 	if ruleBlock {
-		return Block, "Critical Rule Match"
+		return Block, "Critical Rule Match", "Rule Engine"
 	}
 
 	// If the rule score is huge, we don't even need ML.
 	if ruleScore >= 15 {
-		return Block, "High Risk Rule Score"
+		return Block, "High Risk Rule Score", "Rule Engine"
 	}
 
-	// ------------------------------------------
-	// 2. ML / Hybrid Score Check (The "Smart" Layer)
-	// ------------------------------------------
-	// We use the raw 'mlConfidence' (Risk Score) to decide.
-
-	// Case A: High Confidence Attack -> BLOCK
-	// The Service.py sends us a hybrid score (ML + Heuristics).
-	// If it's very high (> 0.75), we block.
 	if mlConfidence > 0.75 {
-		return Block, "AI/Hybrid Anomaly Detected"
+		return Block, "AI/Hybrid Anomaly Detected", "ML Engine"
 	}
 
-	// Case B: Medium Confidence -> MONITOR (Log but allow)
-	// If score is between 0.50 and 0.75, it's suspicious.
-	// We flag it for review but don't break the user experience.
 	if mlConfidence > 0.50 {
-		return Monitor, "Suspicious Activity (Medium Risk)"
+		return Monitor, "Suspicious Activity (Medium Risk)", "ML Engine"
 	}
 
-	// Case C: Low Confidence / Safe
-	// We can still use ruleScore to tie-break if ML is unsure.
 	if ruleScore >= 10 && mlConfidence > 0.40 {
-		return Monitor, "Combined Rule+ML Suspicion"
+		return Monitor, "Combined Rule+ML Suspicion", "Hybrid"
 	}
 
-	return Allow, "Clean"
+	return Allow, "Clean", "None"
 }
