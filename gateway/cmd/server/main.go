@@ -17,7 +17,9 @@ import (
 )
 
 func main() {
+	// ---------------------------------------------------------
 	// 1. CONFIGURATION
+	// ---------------------------------------------------------
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		mongoURI = "mongodb://mongo:27017"
@@ -34,7 +36,9 @@ func main() {
 		mlURL = "http://ml_scorer:8000/predict"
 	}
 
+	// ---------------------------------------------------------
 	// 2. CONNECT DB & LOAD RULES
+	// ---------------------------------------------------------
 	log.Println("Connecting to MongoDB...")
 	client, err := database.Connect(mongoURI)
 	if err != nil {
@@ -42,63 +46,79 @@ func main() {
 	}
 	defer client.Disconnect(context.Background())
 
+	// Load WAF Rules from DB
 	rules, err := database.LoadRules(client, "waf", "rules")
 	if err != nil {
 		log.Printf("Warning: Rules DB error: %v", err)
 	}
 	log.Printf("WAF Engine Ready: %d rules loaded", len(rules))
+	
+	// Initialize Logger (for storing attacks)
 	logger.Init(client, "waf")
 
+	// ---------------------------------------------------------
 	// 3. INIT COMPONENTS
+	// ---------------------------------------------------------
 	originURL, _ := url.Parse(origin)
 	proxy := httputil.NewSingleHostReverseProxy(originURL)
 	
-	// Limit: 100 requests per 1 Minute
+	// Rate Limiter: 100 requests per 1 Minute per IP
 	rateLimiter := limiter.New(100, 1*time.Minute)
 
-// 4. REQUEST HANDLER
+	// ---------------------------------------------------------
+	// 4. REQUEST HANDLER
+	// ---------------------------------------------------------
 	wafHandler := func(w http.ResponseWriter, r *http.Request) {
-		// A. Clean IP
+		// A. Get Client IP
 		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 		if clientIP == "" {
 			clientIP = r.RemoteAddr
 		}
 
 		// B. Rate Limit Check
+		// We don't block immediately here; we pass this status to the Rule Engine.
+		// (Unless you want a hard block for rate limits, but usually rules handle it)
 		limitReached := rateLimiter.IsRateLimited(clientIP)
 
-		// C. Rule-Based Check
-		score, _, forceBlock := detector.CheckRequest(r, rules, limitReached)
+		// C. Rule-Based Engine
+		// Checks regex, headers, and rate limit status against DB rules
+		ruleScore, _, ruleBlock := detector.CheckRequest(r, rules, limitReached)
 
-		if score >= 15 || forceBlock {
-			log.Printf("[BLOCK - RULES] IP: %s | Score: %d", clientIP, score)
-			
-			// 1. Log to DB (Non-blocking usually, but fine here)
-			logger.LogAttack(clientIP, r.URL.Path, "Rules", "Blocked", score, 0.0)
-
-			// 2. Send HTTP Response (Order matters!)
-			w.WriteHeader(http.StatusForbidden)        // Set 403
-			w.Write([]byte("Blocked by WAF Rules"))    // Send Body
-			return
-		}
-
-		// D. ML-Based Check
+		// D. ML-Based Engine
+		// Sends payload to Python service for deep inspection
 		isAnomaly, confidence := detector.CheckML(r, mlURL)
 
-		if isAnomaly {
-			log.Printf("[BLOCK - ML] IP: %s | Confidence: %.2f", clientIP, confidence)
+		// E. DECISION MAKER
+		// Fuse the intelligence from Rules and ML to get a final Verdict
+		verdict, reason := detector.Decide(ruleScore, ruleBlock, isAnomaly, confidence)
+
+		// F. ACTION
+		switch verdict {
+		case detector.Block:
+			log.Printf("⛔ BLOCKED IP: %s | Reason: %s | Score: %d | ML: %.2f", clientIP, reason, ruleScore, confidence)
 			
-			// 1. Log to DB
-			logger.LogAttack(clientIP, r.URL.Path, "ML Anomaly", "Blocked", 0, confidence)
+			// Log to DB
+			logger.LogAttack(clientIP, r.URL.Path, reason, "Blocked", ruleScore, confidence)
 
-			// 2. Send HTTP Response
-			w.WriteHeader(http.StatusForbidden)               // Set 403
-			w.Write([]byte("Blocked by AI Anomaly Detection")) // Send Body
+			// Send 403 Forbidden
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("WAF Blocked: " + reason))
 			return
-		}
 
-		// E. Forward to Origin
-		proxy.ServeHTTP(w, r)
+		case detector.Monitor:
+			// Log but Allow (Useful for testing or low-confidence ML)
+			log.Printf("⚠️ FLAGGED IP: %s | Reason: %s | Score: %d | ML: %.2f", clientIP, reason, ruleScore, confidence)
+			
+			// Log to DB
+			logger.LogAttack(clientIP, r.URL.Path, reason, "Flagged", ruleScore, confidence)
+			
+			// Pass to Origin
+			proxy.ServeHTTP(w, r)
+
+		case detector.Allow:
+			// Perfectly clean traffic
+			proxy.ServeHTTP(w, r)
+		}
 	}
 
 	http.HandleFunc("/", wafHandler)
