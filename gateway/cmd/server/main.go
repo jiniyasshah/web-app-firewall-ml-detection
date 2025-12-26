@@ -172,11 +172,12 @@ func main() {
 
 		// DETERMINE TRIGGER PAYLOAD (The "Evidence")
 		finalTrigger := ""
-		if source == "ML Engine" {
+		switch source {
+		case "ML Engine":
 			finalTrigger = mlTrigger
-		} else if source == "Rule Engine" {
+		case "Rule Engine":
 			finalTrigger = rulePayload
-		} else {
+		default:
 			if mlTrigger != "" {
 				finalTrigger = mlTrigger
 			} else {
