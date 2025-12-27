@@ -14,6 +14,49 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+func LoadAllRulesRaw(client *mongo.Client, dbName, collName string) ([]detector.WAFRule, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cursor, err := client.Database(dbName).Collection(collName).Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var rules []detector.WAFRule
+	if err = cursor.All(ctx, &rules); err != nil {
+		return nil, err
+	}
+	return compileRegexes(rules), nil
+}
+
+// LoadAllPolicies fetches all user overrides
+func LoadAllPolicies(client *mongo.Client, dbName string) ([]detector.RulePolicy, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cursor, err := client.Database(dbName).Collection("rule_policies").Find(ctx, bson.M{})
+	if err != nil { return nil, err }
+	
+	var policies []detector.RulePolicy
+	if err = cursor.All(ctx, &policies); err != nil { return nil, err }
+	return policies, nil
+}
+
+// LoadAllDomains fetches all domains for mapping
+func LoadAllDomains(client *mongo.Client, dbName string) ([]detector.Domain, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	cursor, err := client.Database(dbName).Collection("domains").Find(ctx, bson.M{})
+	if err != nil { return nil, err }
+
+	var domains []detector.Domain
+	if err = cursor.All(ctx, &domains); err != nil { return nil, err }
+	return domains, nil
+}
+
 func Connect(uri string) (*mongo.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -165,14 +208,43 @@ func AddRule(client *mongo.Client, dbName, collName string, rule detector.WAFRul
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	
-	// Ensure ID is generated if missing
 	if rule.ID == "" {
 		rule.ID = primitive.NewObjectID().Hex()
 	}
-
-	collection := client.Database(dbName).Collection(collName)
-	_, err := collection.InsertOne(ctx, rule)
+	_, err := client.Database(dbName).Collection(collName).InsertOne(ctx, rule)
 	return err
+}
+
+// UpsertRulePolicy handles enabling/disabling a rule for a user/domain
+func UpsertRulePolicy(client *mongo.Client, dbName string, policy detector.RulePolicy) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	collection := client.Database(dbName).Collection("rule_policies")
+	
+	filter := bson.M{
+		"user_id": policy.UserID,
+		"rule_id": policy.RuleID,
+		"domain_id": policy.DomainID, // Matches either specific ID or "" (all)
+	}
+	
+	update := bson.M{"$set": bson.M{"enabled": policy.Enabled}}
+	opts := options.Update().SetUpsert(true)
+
+	_, err := collection.UpdateOne(ctx, filter, update, opts)
+	return err
+}
+
+func DeleteRule(client *mongo.Client, dbName, collName, ruleID, ownerID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	// Only delete if the user owns it
+	filter := bson.M{"_id": ruleID, "owner_id": ownerID}
+	res, err := client.Database(dbName).Collection(collName).DeleteOne(ctx, filter)
+	if err != nil { return err }
+	if res.DeletedCount == 0 { return errors.New("rule not found or unauthorized") }
+	return nil
 }
 
 func UpdateRule(client *mongo.Client, dbName, collName string, rule detector.WAFRule) error {

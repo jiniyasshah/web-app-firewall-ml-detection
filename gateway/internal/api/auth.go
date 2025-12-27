@@ -163,8 +163,9 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// [NEW] Logout Handler (Clears the cookie)
+// [NEW] Logout Handler (Clears the cookie and returns JSON)
 func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	// 1. Invalidate the Cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
 		Value:    "",
@@ -172,5 +173,11 @@ func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 	})
+
+	// 2. Return Success Message
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Logged out successfully",
+	})
 }

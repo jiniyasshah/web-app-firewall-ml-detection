@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
 	"web-app-firewall-ml-detection/internal/detector"
@@ -13,32 +14,39 @@ import (
 )
 
 func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
-	// [NEW] Increment Global Request Counter
 	atomic.AddUint64(&h.reqCount, 1)
 
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if clientIP == "" {
-		clientIP = r.RemoteAddr
-	}
+	if clientIP == "" { clientIP = r.RemoteAddr }
 
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	fullReq := logger.FullRequest{
-		Method:  r.Method,
-		URL:     r.URL.String(),
-		Headers: r.Header,
-		Body:    string(bodyBytes),
+	// Determine Rules for this Host
+	// Host usually contains port (e.g. "example.com:8080"), strip it for map lookup
+	host := r.Host
+	if strings.Contains(host, ":") {
+		h, _, _ := net.SplitHostPort(host)
+		if h != "" { host = h }
 	}
+
+	h.rulesMutex.RLock()
+	// Lookup optimized rule set for this specific domain
+	currentRules, exists := h.domainRules[host]
+	if !exists {
+		// Fallback for unknown domains (or use empty slice to fail open)
+		currentRules = h.globalFallback 
+	}
+	h.rulesMutex.RUnlock()
 
 	limitReached := h.RateLimiter.IsRateLimited(clientIP)
 
-	h.rulesMutex.RLock()
-	currentRules := h.rules
-	h.rulesMutex.RUnlock()
-
+	// Engine now processes the customized list
 	ruleScore, triggeredTags, ruleBlock, rulePayload := detector.CheckRequest(r, currentRules, limitReached)
 
+	// ... [Rest of the logic (ML check, Decision, Logging) remains exactly the same] ...
+	
+	// Copy the rest of the file from your existing waf.go starting from "var isAnomaly bool"
 	var isAnomaly bool
 	var confidence float64
 	var mlTag, mlTrigger string
@@ -52,6 +60,13 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 	if mlTag != "" && mlTag != "Normal" && (isAnomaly || confidence > 0.60) {
 		triggeredTags = append(triggeredTags, mlTag)
 	}
+	
+	fullReq := logger.FullRequest{
+		Method:  r.Method,
+		URL:     r.URL.String(),
+		Headers: r.Header,
+		Body:    string(bodyBytes),
+	}
 
 	finalTrigger := rulePayload
 	if source == "ML Engine" || (source == "Hybrid" && mlTrigger != "") {
@@ -60,14 +75,14 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch verdict {
 	case detector.Block:
-		log.Printf("⛔ BLOCKED IP: %s | Source: %s | Reason: %s", clientIP, source, reason)
+		log.Printf("⛔ BLOCKED IP: %s | Host: %s | Source: %s | Reason: %s", clientIP, host, source, reason)
 		logger.LogAttack(clientIP, r.URL.Path, reason, "Blocked", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("WAF Blocked: " + reason))
 		return
 
 	case detector.Monitor:
-		log.Printf("⚠️ FLAGGED IP: %s | Source: %s | Reason: %s", clientIP, source, reason)
+		log.Printf("⚠️ FLAGGED IP: %s | Host: %s | Source: %s", clientIP, host, source)
 		logger.LogAttack(clientIP, r.URL.Path, reason, "Flagged", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
 		h.Proxy.ServeHTTP(w, r)
 

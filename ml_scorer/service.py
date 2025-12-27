@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import joblib
 import os
@@ -6,10 +6,15 @@ import urllib.parse
 import re
 import json
 import psutil
+import time
 
 app = FastAPI()
 MODEL_PATH = "waf_model.pkl"
 model = None
+
+# Stats tracking
+request_count = 0
+start_time = time.time()
 
 # --- 1. Master Preprocessor ---
 def master_preprocess(text):
@@ -82,7 +87,7 @@ def dissect_payload(path, body):
 
     return components
 
-# --- 3. Startup (Clean - relies on start.sh) ---
+# --- 3. Startup ---
 @app.on_event("startup")
 def load_model():
     global model
@@ -120,16 +125,24 @@ def health_check():
     memory_mb = round(memory_info.rss / 1024 / 1024, 2)
     
     # Get CPU usage (percent)
-    cpu_percent = process.cpu_percent(interval=None) # Non-blocking
+    cpu_percent = process.cpu_percent(interval=None)
+    
+    # Calculate simple RPM (Avg since start)
+    uptime_min = (time.time() - start_time) / 60
+    rpm = int(request_count / uptime_min) if uptime_min > 0 else 0
     
     return {
         "status": "online",
         "cpu": f"{cpu_percent}%",
-        "memory": f"{memory_mb} MB"
+        "memory": f"{memory_mb} MB",
+        "network": f"{rpm} Req/min"
     }
 
 @app.post("/predict")
 def predict(data: RequestData):
+    global request_count
+    request_count += 1
+    
     if not model:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
@@ -138,7 +151,7 @@ def predict(data: RequestData):
     max_risk_score = 0.0
     is_anomaly = False
     detected_type = "Normal"
-    trigger_content = "" # [NEW] The specific string that caused the flag
+    trigger_content = "" 
 
     # --- 5. Hybrid Analysis Loop ---
     for source, content in inspectable_items.items():
@@ -168,10 +181,8 @@ def predict(data: RequestData):
         if final_risk > 0.75:
             is_anomaly = True
         
-        # [UPDATED] Track max score AND the triggering content
         if final_risk > max_risk_score:
             max_risk_score = final_risk
-            # We save the content that triggered this high score
             trigger_content = content 
             
             if pred_label != "Normal":
@@ -182,5 +193,5 @@ def predict(data: RequestData):
         "is_anomaly": is_anomaly,
         "anomaly_score": float(max_risk_score),
         "attack_type": detected_type,
-        "trigger_content": trigger_content # [NEW] Return this to Go
+        "trigger_content": trigger_content
     }

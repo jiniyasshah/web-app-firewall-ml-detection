@@ -29,7 +29,7 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 
 	domain.UserID = userID
 	domain.Nameservers = []string{ns1, ns2}
-	domain.Verified = false
+	domain.Status = "unverified"
 
 	if err := database.CreateDomain(h.MongoClient, domain); err != nil {
 		http.Error(w, "Failed to create domain", http.StatusInternalServerError)

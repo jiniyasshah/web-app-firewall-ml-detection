@@ -11,11 +11,12 @@ import (
 )
 
 // ComponentStatus struct for System Status API
+// Unified format: Status | CPU | Memory | Network (Req/min)
 type ComponentStatus struct {
 	Status  string `json:"status"`
-	CPU     string `json:"cpu,omitempty"`
-	Memory  string `json:"memory,omitempty"`
-	Network string `json:"network,omitempty"` // For RPM
+	CPU     string `json:"cpu"`
+	Memory  string `json:"memory"`
+	Network string `json:"network"` 
 }
 
 func (h *APIHandler) SystemStatus(w http.ResponseWriter, r *http.Request) {
@@ -27,29 +28,36 @@ func (h *APIHandler) SystemStatus(w http.ResponseWriter, r *http.Request) {
 	// 1. GATEWAY STATS (Self)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-
-	// Fetch current RPM safely
 	currentRPM := atomic.LoadUint64(&h.rpm)
 
 	statusMap["gateway"] = ComponentStatus{
-		Status:  "online",
+		Status:  "Online",
 		Memory:  fmt.Sprintf("%v MB", m.Alloc/1024/1024),
-		CPU:     fmt.Sprintf("Goroutines: %d", runtime.NumGoroutine()),
+		CPU:     fmt.Sprintf("%d Goroutines", runtime.NumGoroutine()),
 		Network: fmt.Sprintf("%d Req/min", currentRPM),
 	}
 
 	// 2. DATABASE STATS
+	// MongoDB manages its own resources, so we mark CPU/Mem as "Managed" 
+	// but we could query serverStatus if strict stats were needed.
 	if err := h.MongoClient.Ping(context.Background(), nil); err == nil {
-		statusMap["database"] = ComponentStatus{Status: "online", Memory: "Managed", CPU: "Managed"}
+		statusMap["database"] = ComponentStatus{
+			Status:  "Online", 
+			Memory:  "Managed (External)", 
+			CPU:     "Managed (External)",
+			Network: "N/A", // DB doesn't track "Req/min" in this context easily
+		}
 	} else {
-		statusMap["database"] = ComponentStatus{Status: "offline"}
+		statusMap["database"] = ComponentStatus{
+			Status: "Offline",
+			Memory: "0 MB",
+			CPU:    "0%",
+			Network: "0 Req/min",
+		}
 	}
 
 	// 3. ML SCORER STATS
 	statusMap["ml_scorer"] = fetchRemoteHealth(h.MLURL)
-
-	// 4. ORIGIN STATS - [REMOVED as requested]
-	// We don't check the user's server health anymore.
 
 	json.NewEncoder(w).Encode(statusMap)
 }
@@ -57,10 +65,10 @@ func (h *APIHandler) SystemStatus(w http.ResponseWriter, r *http.Request) {
 // Helper to fetch rich stats from Python services
 func fetchRemoteHealth(baseURL string) ComponentStatus {
 	rootURL := baseURL
-	// Trim path to find base URL if needed
 	if len(rootURL) > 0 && rootURL[len(rootURL)-1] == '/' {
 		rootURL = rootURL[:len(rootURL)-1]
 	}
+	// Handle if user passed the full predict URL by mistake
 	if len(rootURL) > 8 && rootURL[len(rootURL)-8:] == "/predict" {
 		rootURL = rootURL[:len(rootURL)-8]
 	}
@@ -68,18 +76,52 @@ func fetchRemoteHealth(baseURL string) ComponentStatus {
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(rootURL + "/health")
 	if err != nil {
-		return ComponentStatus{Status: "offline"}
+		return ComponentStatus{
+			Status: "Offline", 
+			Memory: "0 MB", 
+			CPU: "0%", 
+			Network: "0 Req/min",
+		}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return ComponentStatus{Status: "error"}
+		return ComponentStatus{
+			Status: "Error", 
+			Memory: "Unknown", 
+			CPU: "Unknown", 
+			Network: "0 Req/min",
+		}
 	}
 
-	var stats ComponentStatus
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		// Fallback if the service returns simple 200 OK without JSON stats
-		return ComponentStatus{Status: "online", CPU: "Unknown", Memory: "Unknown"}
+	// Define a struct matching the Python JSON response keys
+	// Python sends: {"status": "online", "cpu": "X%", "memory": "Y MB", "network": "Z Req/min"}
+	var pythonStats struct {
+		Status  string `json:"status"`
+		CPU     string `json:"cpu"`
+		Memory  string `json:"memory"`
+		Network string `json:"network"`
 	}
-	return stats
+
+	if err := json.NewDecoder(resp.Body).Decode(&pythonStats); err != nil {
+		return ComponentStatus{
+			Status: "Online", 
+			Memory: "Unknown", 
+			CPU: "Unknown", 
+			Network: "Unknown",
+		}
+	}
+
+	// Capitalize status to match Go convention
+	status := "Online"
+	if pythonStats.Status != "online" {
+		status = pythonStats.Status
+	}
+
+	return ComponentStatus{
+		Status:  status,
+		CPU:     pythonStats.CPU,
+		Memory:  pythonStats.Memory,
+		Network: pythonStats.Network,
+	}
 }

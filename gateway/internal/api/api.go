@@ -14,7 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// Nameservers for random generation
+// Nameservers for random generation (Used by domains.go)
 var nsNames = []string{"alice", "bob", "charlie", "david", "eve", "mallory", "oscar", "peggy", "sybil", "trent"}
 
 // APIHandler holds all dependencies
@@ -23,19 +23,27 @@ type APIHandler struct {
 	Proxy       *httputil.ReverseProxy
 	RateLimiter *limiter.RateLimiter
 
-	// Config
 	MLURL     string
 	OriginURL string
 	DBName    string
 	CollName  string
 
-	// Active Rules (Mutex protected for hot-swapping)
+	// RULES CACHE
 	rulesMutex sync.RWMutex
-	rules      []detector.WAFRule
+	// Map[HostName] -> List of Enabled Rules for that specific host
+	domainRules map[string][]detector.WAFRule
+	// Fallback for requests that don't match a known domain (or direct IP access)
+	globalFallback []detector.WAFRule
 
-	// [NEW] Traffic Stats
-	reqCount uint64 // Atomic counter for current minute
-	rpm      uint64 // Stored value of last minute's requests
+	// Stats
+	reqCount uint64
+	rpm      uint64
+}
+
+// [FIX] Define policyKey at package level so it is shared between ReloadRules and isEnabled
+type policyKey struct {
+	RuleID   string
+	DomainID string
 }
 
 // NewAPIHandler initializes the handler and loads initial rules
@@ -48,36 +56,112 @@ func NewAPIHandler(client *mongo.Client, proxy *httputil.ReverseProxy, limiter *
 		OriginURL:   originURL,
 		DBName:      "waf",
 		CollName:    "rules",
+		domainRules: make(map[string][]detector.WAFRule),
 	}
 	h.ReloadRules()
-
-	// Start Background Stats Tracker
 	go h.startStatsTicker()
-
 	return h
 }
 
-// ReloadRules fetches enabled rules from DB and updates the engine
+// ReloadRules: The Brain. Merges Global Rules, Private Rules, and Policies.
 func (h *APIHandler) ReloadRules() {
 	h.rulesMutex.Lock()
 	defer h.rulesMutex.Unlock()
 
-	rules, err := database.LoadRules(h.MongoClient, h.DBName, h.CollName)
+	// 1. Fetch Data
+	allRules, err := database.LoadAllRulesRaw(h.MongoClient, h.DBName, h.CollName)
 	if err != nil {
-		log.Printf("Error reloading rules: %v", err)
+		log.Printf("Error loading rules: %v", err)
 		return
 	}
-	h.rules = rules
-	log.Printf("♻️ Rules Reloaded. Active count: %d", len(h.rules))
+
+	policies, err := database.LoadAllPolicies(h.MongoClient, h.DBName)
+	if err != nil {
+		log.Printf("Error loading policies: %v", err)
+		return
+	}
+
+	domains, err := database.LoadAllDomains(h.MongoClient, h.DBName)
+	if err != nil {
+		log.Printf("Error loading domains: %v", err)
+		return
+	}
+
+	// 2. Separate Global vs Private
+	globalRules := []detector.WAFRule{}
+	// Map[OwnerID] -> []Rules
+	privateRules := make(map[string][]detector.WAFRule)
+
+	for _, r := range allRules {
+		if r.OwnerID == "" {
+			globalRules = append(globalRules, r)
+		} else {
+			privateRules[r.OwnerID] = append(privateRules[r.OwnerID], r)
+		}
+	}
+
+	// 3. Index Policies for fast lookup
+	policyMap := make(map[policyKey]bool)
+
+	for _, p := range policies {
+		policyMap[policyKey{RuleID: p.RuleID, DomainID: p.DomainID}] = p.Enabled
+	}
+
+	// 4. Build Effective Ruleset per Domain
+	newDomainRules := make(map[string][]detector.WAFRule)
+
+	for _, d := range domains {
+		var effective []detector.WAFRule
+
+		// A. Start with Global Rules
+		for _, r := range globalRules {
+			// Global rules default to TRUE (enabled) unless policy says otherwise
+			if isEnabled(r.ID, d.ID, policyMap, true) {
+				effective = append(effective, r)
+			}
+		}
+
+		// B. Add User's Private Rules
+		if userRules, ok := privateRules[d.UserID]; ok {
+			for _, r := range userRules {
+				// Private rules default to TRUE (enabled) unless policy says otherwise
+				if isEnabled(r.ID, d.ID, policyMap, true) {
+					effective = append(effective, r)
+				}
+			}
+		}
+
+		newDomainRules[d.Name] = effective
+	}
+
+	// 5. Update Handler
+	h.domainRules = newDomainRules
+	h.globalFallback = globalRules // Raw global rules as fallback
+
+	log.Printf("♻️ Rules Reloaded. Configured %d domains.", len(h.domainRules))
 }
 
-// Background Ticker to calculate RPM
+// Helper to check policy precedence:
+// 1. Specific Domain Policy (Does this rule have a setting for this specific domain?)
+// 2. "All Domains" Policy (Does this rule have a setting for "all domains" / empty domain_id?)
+// 3. Default Value (If no policy exists, what is the default?)
+// [FIX] Updated signature to use the package-level policyKey type
+func isEnabled(ruleID, domainID string, policies map[policyKey]bool, def bool) bool {
+	// Check specific domain policy
+	if status, exists := policies[policyKey{RuleID: ruleID, DomainID: domainID}]; exists {
+		return status
+	}
+	// Check generic "all domains" policy (DomainID == "")
+	if status, exists := policies[policyKey{RuleID: ruleID, DomainID: ""}]; exists {
+		return status
+	}
+	return def
+}
+
 func (h *APIHandler) startStatsTicker() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-
 	for range ticker.C {
-		// Swap current count to RPM and reset counter to 0
 		count := atomic.SwapUint64(&h.reqCount, 0)
 		atomic.StoreUint64(&h.rpm, count)
 	}

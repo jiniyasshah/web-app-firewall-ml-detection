@@ -96,10 +96,17 @@ func main() {
 	mux.HandleFunc("/api/domains", api.AuthMiddleware(apiHandler.ListDomains))
 	mux.HandleFunc("/api/domains/add", api.AuthMiddleware(apiHandler.AddDomain))
 	
-	// Rule Management
-	mux.HandleFunc("/api/rules", api.AuthMiddleware(apiHandler.GetRules))
-	mux.HandleFunc("/api/rules/add", api.AuthMiddleware(apiHandler.AddRuleSecure))
-	mux.HandleFunc("/api/rules/toggle", api.AuthMiddleware(apiHandler.ToggleRule)) // Toggle Handler
+// [UPDATED] Rules Management
+	// Global (Fetch + Toggle)
+	mux.HandleFunc("/api/rules/global", api.AuthMiddleware(apiHandler.GetGlobalRules))
+	
+	// Custom (Fetch + Add + Delete)
+	mux.HandleFunc("/api/rules/custom", api.AuthMiddleware(apiHandler.GetCustomRules))
+	mux.HandleFunc("/api/rules/custom/add", api.AuthMiddleware(apiHandler.AddCustomRule))
+	mux.HandleFunc("/api/rules/custom/delete", api.AuthMiddleware(apiHandler.DeleteCustomRule))
+	
+	// Shared Toggle (Works for both rule types)
+	mux.HandleFunc("/api/rules/toggle", api.AuthMiddleware(apiHandler.ToggleRule))
 	
 	// Secured Logs
 	mux.HandleFunc("/api/logs/secure", api.AuthMiddleware(apiHandler.SecuredLogsHandler))
