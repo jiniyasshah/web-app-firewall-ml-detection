@@ -15,50 +15,101 @@ import (
 	"web-app-firewall-ml-detection/internal/logger"
 )
 
+// [NEW] CORS Middleware
+// This wraps the entire router to handle Preflight (OPTIONS) and set headers
+func CORSMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Allow the Frontend Origin
+		// In production, change this to your actual domain or use os.Getenv("FRONTEND_URL")
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3001")
+
+		// 2. Allow Credentials (Cookies) - CRITICAL for Auth
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+		// 3. Allowed Methods
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+
+		// 4. Allowed Headers (Content-Type for JSON, Authorization if using Bearer)
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+
+		// 5. Handle Preflight (OPTIONS) requests immediately
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	// 1. CONFIGURATION
 	mongoURI := os.Getenv("MONGO_URI")
-	if mongoURI == "" { mongoURI = "mongodb://mongo:27017" }
+	if mongoURI == "" {
+		mongoURI = "mongodb://mongo:27017"
+	}
 
 	origin := os.Getenv("ORIGIN_URL")
-	if origin == "" { origin = "http://origin:3000" }
+	if origin == "" {
+		origin = "http://origin:3000"
+	}
 
 	mlURL := os.Getenv("ML_URL")
-	if mlURL == "" { mlURL = "http://ml_scorer:8000/predict" }
+	if mlURL == "" {
+		mlURL = "http://ml_scorer:8000/predict"
+	}
 
 	// 2. CONNECT DB
 	log.Println("Connecting to MongoDB...")
 	client, err := database.Connect(mongoURI)
-	if err != nil { log.Fatal(err) }
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer client.Disconnect(context.Background())
 
 	// 3. INIT COMPONENTS
 	logger.Init(client, "waf")
-	
+
 	originURL, _ := url.Parse(origin)
 	proxy := httputil.NewSingleHostReverseProxy(originURL)
 	rateLimiter := limiter.New(100, 1*time.Minute)
 
-	// 4. INIT API HANDLER (Manages Rules, WAF, and Status)
+	// 4. INIT API HANDLER
 	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, origin)
 
 	// 5. DEFINE ROUTES
 	mux := http.NewServeMux()
 
-	// Dashboard Endpoints
-	mux.HandleFunc("/api/stream", apiHandler.SSEHandler)
-	mux.HandleFunc("/api/logs", apiHandler.LogsHandler)
+	// --- PUBLIC ENDPOINTS ---
 	mux.HandleFunc("/api/status", apiHandler.SystemStatus)
+	mux.HandleFunc("/api/auth/register", apiHandler.Register)
+	mux.HandleFunc("/api/auth/login", apiHandler.Login)
+	mux.HandleFunc("/api/auth/logout", apiHandler.Logout) // Don't forget Logout!
+    mux.HandleFunc("/api/auth/check", api.AuthMiddleware(apiHandler.CheckAuth))
 	
-	// Rule Management Endpoints
-	mux.HandleFunc("/api/rules", apiHandler.GetRules)         // GET
-	mux.HandleFunc("/api/rules/add", apiHandler.AddRule)      // POST
-	mux.HandleFunc("/api/rules/toggle", apiHandler.ToggleRule)// POST
+	// Stream (Keep public or secure as needed)
+	mux.HandleFunc("/api/stream", apiHandler.SSEHandler)
 
-	// WAF Traffic Handler (Catch-All)
+	// --- PROTECTED ENDPOINTS (Wrapped with AuthMiddleware) ---
+	
+	// Domain Management
+	mux.HandleFunc("/api/domains", api.AuthMiddleware(apiHandler.ListDomains))
+	mux.HandleFunc("/api/domains/add", api.AuthMiddleware(apiHandler.AddDomain))
+	
+	// Rule Management
+	mux.HandleFunc("/api/rules", api.AuthMiddleware(apiHandler.GetRules))
+	mux.HandleFunc("/api/rules/add", api.AuthMiddleware(apiHandler.AddRuleSecure))
+	mux.HandleFunc("/api/rules/toggle", api.AuthMiddleware(apiHandler.ToggleRule)) // Toggle Handler
+	
+	// Secured Logs
+	mux.HandleFunc("/api/logs/secure", api.AuthMiddleware(apiHandler.SecuredLogsHandler))
+
+	// --- WAF TRAFFIC HANDLER (Catch-All) ---
 	mux.HandleFunc("/", apiHandler.WAFHandler)
 
-	// 6. START SERVER
+	// 6. START SERVER (With CORS Wrapper)
 	log.Println("Gateway running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	
+	// Wrap the mux with the CORS middleware
+	log.Fatal(http.ListenAndServe(":8080", CORSMiddleware(mux)))
 }

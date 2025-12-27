@@ -5,6 +5,7 @@ import os
 import urllib.parse
 import re
 import json
+import psutil
 
 app = FastAPI()
 MODEL_PATH = "waf_model.pkl"
@@ -108,6 +109,24 @@ def calculate_heuristic_score(content):
         if char in content_lower:
             score += (weight * content_lower.count(char))
     return min(score, 0.60)
+
+
+@app.get("/health")
+def health_check():
+    process = psutil.Process(os.getpid())
+    
+    # Get memory usage in MB
+    memory_info = process.memory_info()
+    memory_mb = round(memory_info.rss / 1024 / 1024, 2)
+    
+    # Get CPU usage (percent)
+    cpu_percent = process.cpu_percent(interval=None) # Non-blocking
+    
+    return {
+        "status": "online",
+        "cpu": f"{cpu_percent}%",
+        "memory": f"{memory_mb} MB"
+    }
 
 @app.post("/predict")
 def predict(data: RequestData):
