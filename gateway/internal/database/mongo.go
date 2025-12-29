@@ -6,6 +6,7 @@ import (
 	"log"
 	"regexp"
 	"time"
+
 	"web-app-firewall-ml-detection/internal/detector"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,49 +15,12 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func LoadAllRulesRaw(client *mongo.Client, dbName, collName string) ([]detector.WAFRule, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+const (
+	DBName          = "waf"
+	TimeoutDuration = 5 * time.Second
+)
 
-	cursor, err := client.Database(dbName).Collection(collName).Find(ctx, bson.M{})
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	var rules []detector.WAFRule
-	if err = cursor.All(ctx, &rules); err != nil {
-		return nil, err
-	}
-	return compileRegexes(rules), nil
-}
-
-// LoadAllPolicies fetches all user overrides
-func LoadAllPolicies(client *mongo.Client, dbName string) ([]detector.RulePolicy, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cursor, err := client.Database(dbName).Collection("rule_policies").Find(ctx, bson.M{})
-	if err != nil { return nil, err }
-	
-	var policies []detector.RulePolicy
-	if err = cursor.All(ctx, &policies); err != nil { return nil, err }
-	return policies, nil
-}
-
-// LoadAllDomains fetches all domains for mapping
-func LoadAllDomains(client *mongo.Client, dbName string) ([]detector.Domain, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	
-	cursor, err := client.Database(dbName).Collection("domains").Find(ctx, bson.M{})
-	if err != nil { return nil, err }
-
-	var domains []detector.Domain
-	if err = cursor.All(ctx, &domains); err != nil { return nil, err }
-	return domains, nil
-}
-
+// Connect initializes the MongoDB client
 func Connect(uri string) (*mongo.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -64,80 +28,128 @@ func Connect(uri string) (*mongo.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return client, client.Ping(ctx, nil)
+	// Verify connection
+	if err := client.Ping(ctx, nil); err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
+// ---------------------------------------------------------
+// USER MANAGEMENT
+// ---------------------------------------------------------
+
 func CreateUser(client *mongo.Client, user detector.User) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
-	
+
 	// Check if email exists
 	var existing detector.User
-	err := client.Database("waf").Collection("users").FindOne(ctx, bson.M{"email": user.Email}).Decode(&existing)
+	err := client.Database(DBName).Collection("users").FindOne(ctx, bson.M{"email": user.Email}).Decode(&existing)
 	if err == nil {
 		return errors.New("email already registered")
 	}
 
-	user.ID = primitive.NewObjectID().Hex()
-	_, err = client.Database("waf").Collection("users").InsertOne(ctx, user)
+	if user.ID == "" {
+		user.ID = primitive.NewObjectID().Hex()
+	}
+	_, err = client.Database(DBName).Collection("users").InsertOne(ctx, user)
 	return err
 }
 
 func GetUserByEmail(client *mongo.Client, email string) (*detector.User, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
 	var user detector.User
-	err := client.Database("waf").Collection("users").FindOne(ctx, bson.M{"email": email}).Decode(&user)
-	if err != nil { return nil, err }
+	err := client.Database(DBName).Collection("users").FindOne(ctx, bson.M{"email": email}).Decode(&user)
+	if err != nil {
+		return nil, err
+	}
 	return &user, nil
 }
 
-// --- DOMAIN MANAGEMENT ---
+func GetUserByID(client *mongo.Client, id string) (*detector.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	var user detector.User
+	err := client.Database(DBName).Collection("users").FindOne(ctx, bson.M{"_id": id}).Decode(&user)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// ---------------------------------------------------------
+// DOMAIN MANAGEMENT
+// ---------------------------------------------------------
 
 func CreateDomain(client *mongo.Client, domain detector.Domain) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
-	domain.ID = primitive.NewObjectID().Hex()
+
+	if domain.ID == "" {
+		domain.ID = primitive.NewObjectID().Hex()
+	}
 	domain.CreatedAt = time.Now()
-	_, err := client.Database("waf").Collection("domains").InsertOne(ctx, domain)
+	_, err := client.Database(DBName).Collection("domains").InsertOne(ctx, domain)
 	return err
 }
 
 func GetDomainsByUser(client *mongo.Client, userID string) ([]detector.Domain, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
-	
-	cursor, err := client.Database("waf").Collection("domains").Find(ctx, bson.M{"user_id": userID})
-	if err != nil { return nil, err }
-	
+
+	cursor, err := client.Database(DBName).Collection("domains").Find(ctx, bson.M{"user_id": userID})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
 	var domains []detector.Domain
-	cursor.All(ctx, &domains)
+	if err = cursor.All(ctx, &domains); err != nil {
+		return nil, err
+	}
 	return domains, nil
 }
 
-// Find the domain config based on the incoming Host header (e.g., "example.com")
+// GetDomainByName finds config based on Host header (e.g., "example.com")
 func GetDomainByName(client *mongo.Client, host string) (*detector.Domain, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Fast timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Fast timeout for request path
 	defer cancel()
 
 	var domain detector.Domain
-	err := client.Database("waf").Collection("domains").FindOne(ctx, bson.M{"name": host}).Decode(&domain)
-	if err != nil { return nil, err }
+	err := client.Database(DBName).Collection("domains").FindOne(ctx, bson.M{"name": host}).Decode(&domain)
+	if err != nil {
+		return nil, err
+	}
 	return &domain, nil
 }
 
-// LoadRules fetches ONLY enabled rules for the Detector Engine
-func LoadRules(client *mongo.Client, dbName, collName string) ([]detector.WAFRule, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func GetDomainByID(client *mongo.Client, id string) (*detector.Domain, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
-	collection := client.Database(dbName).Collection(collName)
-	// Sort by priority or ID
-	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}})
-	
-	// FILTER: Only fetch enabled rules
-	cursor, err := collection.Find(ctx, bson.M{"enabled": true}, opts)
+	var domain detector.Domain
+	err := client.Database(DBName).Collection("domains").FindOne(ctx, bson.M{"_id": id}).Decode(&domain)
+	if err != nil {
+		return nil, err
+	}
+	return &domain, nil
+}
+
+// ---------------------------------------------------------
+// RULE MANAGEMENT
+// ---------------------------------------------------------
+
+// GetRules is the unified function to fetch rules based on a filter
+func GetRules(client *mongo.Client, filter bson.M) ([]detector.WAFRule, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}) // Stable ordering
+	cursor, err := client.Database(DBName).Collection("rules").Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -148,128 +160,95 @@ func LoadRules(client *mongo.Client, dbName, collName string) ([]detector.WAFRul
 		return nil, err
 	}
 
+	// Safety: return empty slice instead of nil
+	if rules == nil {
+		rules = []detector.WAFRule{}
+	}
+
 	return compileRegexes(rules), nil
 }
 
-// [NEW] Helper to check domain ownership
-func GetDomainByID(client *mongo.Client, id string) (*detector.Domain, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func AddRule(client *mongo.Client, rule detector.WAFRule) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
-	var domain detector.Domain
-	// Note: _id in Mongo is usually an ObjectID or string depending on how you stored it. 
-	// Since we stored it as a Hex string in CreateDomain, we query by "_id".
-	err := client.Database("waf").Collection("domains").FindOne(ctx, bson.M{"_id": id}).Decode(&domain)
-	if err != nil {
-		return nil, err
-	}
-	return &domain, nil
-}
-
-// Fetch ALL rules (Enabled + Disabled) for a specific Domain so the Dashboard can manage them
-func GetAllRules(client *mongo.Client, domainID string) ([]detector.WAFRule, error) {
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-
-    var filter bson.M
-
-    // LOGIC FIX:
-    if domainID == "" {
-        // Case 1: Fetching Global Rules
-        // We look for documents where "domain_id" does NOT exist
-        filter = bson.M{"domain_id": bson.M{"$exists": false}}
-    } else {
-        // Case 2: Fetching Specific Domain Rules
-        // We look ONLY for that domain. We do NOT use $or here, 
-        // because the Handler already merges the lists for us.
-        filter = bson.M{"domain_id": domainID}
-    }
-
-    cursor, err := client.Database("waf").Collection("rules").Find(ctx, filter)
-    if err != nil {
-        return nil, err
-    }
-    defer cursor.Close(ctx)
-
-    var rules []detector.WAFRule
-    if err = cursor.All(ctx, &rules); err != nil {
-        return nil, err
-    }
-    
-    // Safety check: ensure we return an empty slice instead of nil if no rules found
-    if rules == nil {
-        rules = []detector.WAFRule{}
-    }
-
-    return rules, nil
-}
-
-func AddRule(client *mongo.Client, dbName, collName string, rule detector.WAFRule) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	
 	if rule.ID == "" {
 		rule.ID = primitive.NewObjectID().Hex()
 	}
-	_, err := client.Database(dbName).Collection(collName).InsertOne(ctx, rule)
+	_, err := client.Database(DBName).Collection("rules").InsertOne(ctx, rule)
 	return err
 }
 
-// UpsertRulePolicy handles enabling/disabling a rule for a user/domain
-func UpsertRulePolicy(client *mongo.Client, dbName string, policy detector.RulePolicy) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func UpdateRule(client *mongo.Client, rule detector.WAFRule) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
-	collection := client.Database(dbName).Collection("rule_policies")
-	
-	filter := bson.M{
-		"user_id": policy.UserID,
-		"rule_id": policy.RuleID,
-		"domain_id": policy.DomainID, // Matches either specific ID or "" (all)
-	}
-	
-	update := bson.M{"$set": bson.M{"enabled": policy.Enabled}}
-	opts := options.Update().SetUpsert(true)
-
-	_, err := collection.UpdateOne(ctx, filter, update, opts)
+	filter := bson.M{"_id": rule.ID}
+	update := bson.M{"$set": rule}
+	_, err := client.Database(DBName).Collection("rules").UpdateOne(ctx, filter, update)
 	return err
 }
 
-func DeleteRule(client *mongo.Client, dbName, collName, ruleID, ownerID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func DeleteRule(client *mongo.Client, ruleID, ownerID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
-	
-	// Only delete if the user owns it
+
+	// Safety: Only delete if the user owns it
 	filter := bson.M{"_id": ruleID, "owner_id": ownerID}
-	res, err := client.Database(dbName).Collection(collName).DeleteOne(ctx, filter)
-	if err != nil { return err }
-	if res.DeletedCount == 0 { return errors.New("rule not found or unauthorized") }
+	res, err := client.Database(DBName).Collection("rules").DeleteOne(ctx, filter)
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return errors.New("rule not found or unauthorized")
+	}
 	return nil
 }
 
-func UpdateRule(client *mongo.Client, dbName, collName string, rule detector.WAFRule) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// ---------------------------------------------------------
+// POLICY MANAGEMENT (Overrides)
+// ---------------------------------------------------------
+
+// GetPoliciesByUser fetches all policies (enabled/disabled states) for a specific user
+func GetPoliciesByUser(client *mongo.Client, userID string) ([]detector.RulePolicy, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
-	collection := client.Database(dbName).Collection(collName)
-	filter := bson.M{"_id": rule.ID}
-	update := bson.M{"$set": rule}
-	_, err := collection.UpdateOne(ctx, filter, update)
+	cursor, err := client.Database(DBName).Collection("rule_policies").Find(ctx, bson.M{"user_id": userID})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var policies []detector.RulePolicy
+	if err = cursor.All(ctx, &policies); err != nil {
+		return nil, err
+	}
+	return policies, nil
+}
+
+// UpsertRulePolicy handles enabling/disabling a rule for a user/domain
+func UpsertRulePolicy(client *mongo.Client, policy detector.RulePolicy) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	filter := bson.M{
+		"user_id":   policy.UserID,
+		"rule_id":   policy.RuleID,
+		"domain_id": policy.DomainID,
+	}
+
+	update := bson.M{"$set": bson.M{"enabled": policy.Enabled}}
+	opts := options.Update().SetUpsert(true)
+
+	_, err := client.Database(DBName).Collection("rule_policies").UpdateOne(ctx, filter, update, opts)
 	return err
 }
 
-func ToggleRule(client *mongo.Client, dbName, collName, id string, enabled bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// ---------------------------------------------------------
+// LOGGING
+// ---------------------------------------------------------
 
-	collection := client.Database(dbName).Collection(collName)
-	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{"enabled": enabled}}
-	_, err := collection.UpdateOne(ctx, filter, update)
-	return err
-}
-
-// GetLogsForUser (Secured View - Only logs for domains owned by user)
 func GetLogsForUser(client *mongo.Client, userID string, limit int64) ([]interface{}, error) {
 	// 1. Get all domain IDs for this user
 	domains, err := GetDomainsByUser(client, userID)
@@ -277,43 +256,27 @@ func GetLogsForUser(client *mongo.Client, userID string, limit int64) ([]interfa
 		return nil, err
 	}
 
-	domainIDs := []string{}
-	for _, d := range domains {
-		domainIDs = append(domainIDs, d.ID)
-	}
-
-	// If user has no domains, return empty list
-	if len(domainIDs) == 0 {
+	if len(domains) == 0 {
 		return []interface{}{}, nil
 	}
 
-	// 2. Fetch logs matching those domain IDs
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// 2. Filter logs by Host Header matching user's domains
+	// Note: In a production V2, we should store 'domain_id' directly in the logs collection for efficiency.
+	domainNames := make([]string, len(domains))
+	for i, d := range domains {
+		domainNames[i] = d.Name
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
-	// Note: You need to make sure your logs are saved with 'domain_id'.
-	// If not, you might need to filter by 'request.headers.Host' or similar.
-	// For now, assuming logs have 'domain_id' or we filter roughly by IP/Host if added.
-	// This query assumes you update logger.go to save DomainID.
-	// If you haven't yet, you might need to query by "request.url" regex matching the domain names.
-	
-	// Fallback Strategy: Match Host Header in logs corresponding to user domains
-	// (Since we didn't add DomainID to the Log struct in previous steps)
-	domainNames := []string{}
-	for _, d := range domains {
-		domainNames = append(domainNames, d.Name)
+	filter := bson.M{
+		"request.headers.Host": bson.M{"$in": domainNames},
 	}
 
-	// Filter logs where Host header matches one of the user's domains
-	// Note: This requires the log structure to have headers accessible in query
-	// Ideally, add "domain_id" to AttackLog struct in logger.go for performance.
-	filter := bson.M{
-		"request.headers.Host": bson.M{"$in": domainNames}, // Go driver handles []string mapping to Headers map
-	}
-	
 	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: -1}}).SetLimit(limit)
 
-	cursor, err := client.Database("waf").Collection("logs").Find(ctx, filter, opts)
+	cursor, err := client.Database(DBName).Collection("logs").Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +290,78 @@ func GetLogsForUser(client *mongo.Client, userID string, limit int64) ([]interfa
 	return logs, nil
 }
 
-// Helper to compile regexes
+// --- GLOBAL FETCH HELPERS (For API Cache Reload) ---
+
+// GetAllDomains fetches every domain in the system to build the routing map
+func GetAllDomains(client *mongo.Client) ([]detector.Domain, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	cursor, err := client.Database(DBName).Collection("domains").Find(ctx, bson.M{})
+	if err != nil { return nil, err }
+	defer cursor.Close(ctx)
+
+	var domains []detector.Domain
+	if err = cursor.All(ctx, &domains); err != nil { return nil, err }
+	return domains, nil
+}
+
+// GetAllPolicies fetches every policy to determine rule enablement
+func GetAllPolicies(client *mongo.Client) ([]detector.RulePolicy, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	cursor, err := client.Database(DBName).Collection("rule_policies").Find(ctx, bson.M{})
+	if err != nil { return nil, err }
+	defer cursor.Close(ctx)
+
+	var policies []detector.RulePolicy
+	if err = cursor.All(ctx, &policies); err != nil { return nil, err }
+	return policies, nil
+}
+
+// UpdateDomainTarget saves the REAL Origin IP for the WAF to use
+func UpdateDomainRouting(client *mongo.Client, domainName string, originIP string, proxied bool) error {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    collection := client.Database("waf").Collection("domains")
+    filter := bson.M{"name": domainName}
+    
+    update := bson.M{
+        "$set": bson.M{
+            "target_ip": originIP, // The Secret Real IP
+            "proxied":   proxied,
+            "updated_at": time.Now(),
+        },
+    }
+    _, err := collection.UpdateOne(ctx, filter, update)
+    return err
+}
+
+// UpdateDomainStatus activates the domain after verification
+func UpdateDomainStatus(client *mongo.Client, domainID, status string, proxied bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	collection := client.Database("waf").Collection("domains")
+	filter := bson.M{"_id": domainID}
+	
+	update := bson.M{
+		"$set": bson.M{
+			"status": status,
+			"proxied": proxied,
+			"updated_at": time.Now(),
+		},
+	}
+	_, err := collection.UpdateOne(ctx, filter, update)
+	return err
+}
+// ---------------------------------------------------------
+// HELPERS
+// ---------------------------------------------------------
+
+// compileRegexes pre-compiles regex strings in rules to Go Regexp objects
 func compileRegexes(rules []detector.WAFRule) []detector.WAFRule {
 	for i := range rules {
 		for j := range rules[i].Conditions {

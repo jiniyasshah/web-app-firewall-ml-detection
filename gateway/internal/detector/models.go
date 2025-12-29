@@ -6,45 +6,47 @@ import (
 )
 
 // --- USER & AUTH MODELS ---
+
 type User struct {
 	ID       string `bson:"_id,omitempty" json:"id"`
+	Name     string `bson:"name" json:"name"`           // [NEW] User's Display Name
 	Email    string `bson:"email" json:"email"`
-	Password string `bson:"password" json:"password"` 
+	Password string `bson:"password" json:"-"`          // Password is never output to JSON
 }
 
 type Domain struct {
-	ID             string    `bson:"_id,omitempty" json:"_id"`
-	UserID         string    `bson:"user_id" json:"user_id"`
-	Name           string    `bson:"name" json:"name"`           // e.g. "myapp.com"
-	TargetURL      string    `bson:"target_url" json:"target_url"`
-	Nameservers    []string  `bson:"nameservers" json:"nameservers"`
-	Status         string    `bson:"status" json:"status"`
-	CreatedAt      time.Time `bson:"created_at" json:"created_at"`
+	ID          string    `bson:"_id,omitempty" json:"_id"`
+	UserID      string    `bson:"user_id" json:"user_id"`
+	Name        string    `bson:"name" json:"name"`           // e.g. "myapp.com"
+	
+	// [NEW FIELDS FOR DNS WAF]
+	TargetIP    string    `bson:"target_ip" json:"target_ip"` // The real backend IP (Hidden)
+	Proxied     bool      `bson:"proxied" json:"proxied"`     // Is traffic flowing through WAF?
+	
+	TargetURL   string    `bson:"target_url" json:"target_url"` // Keep for legacy compatibility if needed
+	Nameservers []string  `bson:"nameservers" json:"nameservers"`
+	Status      string    `bson:"status" json:"status"`
+	CreatedAt   time.Time `bson:"created_at" json:"created_at"`
 }
 
-// --- UPDATED WAF MODELS ---
+// --- WAF MODELS ---
 
-// WAFRule defines *what* the rule does.
 type WAFRule struct {
-	ID         string      `bson:"_id,omitempty" json:"_id"`
-	OwnerID    string      `bson:"owner_id,omitempty" json:"owner_id"` // Empty = Global/System Rule. Set = Private Rule.
+	ID         string      `bson:"_id,omitempty" json:"id"`
+	OwnerID    string      `bson:"owner_id,omitempty" json:"owner_id"` // Empty = Global, Set = Private
 	Name       string      `bson:"name" json:"name"`
 	Conditions []Condition `bson:"conditions" json:"conditions"`
 	OnMatch    Action      `bson:"on_match" json:"on_match"`
 	
-	// Internal field for logic, not stored in DB directly if using policies
+	// Enabled is a virtual field for the UI, calculated from Policies
 	Enabled    bool        `bson:"-" json:"enabled"` 
 }
 
-// RulePolicy defines *how* a user applies a rule (Global or Private).
-// This decouples the definition from the configuration.
 type RulePolicy struct {
 	ID        string `bson:"_id,omitempty" json:"id"`
 	UserID    string `bson:"user_id" json:"user_id"`
 	RuleID    string `bson:"rule_id" json:"rule_id"`
-	
-	// If DomainID is empty, this policy applies to ALL domains owned by UserID
-	DomainID  string `bson:"domain_id,omitempty" json:"domain_id"` 	
+	DomainID  string `bson:"domain_id,omitempty" json:"domain_id"`
 	Enabled   bool   `bson:"enabled" json:"enabled"`
 }
 

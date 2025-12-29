@@ -18,12 +18,12 @@ type MLResponse struct {
 	IsAnomaly      bool    `json:"is_anomaly"`
 	AnomalyScore   float64 `json:"anomaly_score"`
 	AttackType     string  `json:"attack_type"`
-	TriggerContent string  `json:"trigger_content"` // [NEW]
+	TriggerContent string  `json:"trigger_content"`
 }
 
-// CheckML returns: (IsAnomaly, Score, AttackType, TriggerContent)
+// CheckML sends the request to the Python ML service
 func CheckML(r *http.Request, mlURL string) (bool, float64, string, string) {
-	// 1. Prepare Data
+	// Re-read body (it was restored in WAFHandler)
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
@@ -33,17 +33,23 @@ func CheckML(r *http.Request, mlURL string) (bool, float64, string, string) {
 		Length: len(bodyBytes),
 	}
 
-	jsonData, _ := json.Marshal(payload)
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return false, 0.0, "", ""
+	}
 
-	// 2. Send to Python Service
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Post(mlURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
+		// Log error in production
 		return false, 0.0, "", ""
 	}
 	defer resp.Body.Close()
 
-	// 3. Parse Response
+	if resp.StatusCode != http.StatusOK {
+		return false, 0.0, "", ""
+	}
+
 	var result MLResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return false, 0.0, "", ""

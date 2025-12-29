@@ -16,10 +16,6 @@ import (
 // JWT Secret (Use os.Getenv in production)
 var JWTSecret = []byte("super_secret_waf_key_change_me")
 
-// ---------------------------------------------------------
-// AUTHENTICATION HANDLERS
-// ---------------------------------------------------------
-
 func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -29,6 +25,12 @@ func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var input detector.User
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "Invalid JSON Body", http.StatusBadRequest)
+		return
+	}
+
+	// Basic Validation
+	if input.Email == "" || input.Password == "" || input.Name == "" {
+		http.Error(w, "Name, Email and Password are required", http.StatusBadRequest)
 		return
 	}
 
@@ -50,7 +52,6 @@ func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "User registered successfully"})
 }
 
-// [UPDATED] Login now sets an HttpOnly Cookie
 func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -88,56 +89,62 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// [SECURE CHANGE] Set HttpOnly Cookie
+	// Set HttpOnly Cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
 		Value:    tokenString,
 		Expires:  expiration,
-		HttpOnly: true,                   // JavaScript cannot access this
-		Secure:   false,                  // Set to true in Production (HTTPS)
-		SameSite: http.SameSiteLaxMode,   // Protects against CSRF
+		HttpOnly: true,
+		Secure:   false, // Set true in production (HTTPS)
+		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
 	})
 
-	// Return success (no token in body)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Login successful"})
+	// Return User Info (including Name)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Login successful",
+		"user": map[string]string{
+			"id":    user.ID,
+			"name":  user.Name,
+			"email": user.Email,
+		},
+	})
 }
 
 func (h *APIHandler) CheckAuth(w http.ResponseWriter, r *http.Request) {
-    // 1. Retrieve user_id from context (set by AuthMiddleware)
-    userID, ok := r.Context().Value("user_id").(string)
-    if !ok {
-        http.Error(w, "Server Error: User ID not found in context", http.StatusInternalServerError)
-        return
-    }
+	userID, ok := r.Context().Value("user_id").(string)
+	if !ok {
+		http.Error(w, "Server Error", http.StatusInternalServerError)
+		return
+	}
 
-    // 2. (Optional) Fetch full user details from DB if you need the email/role
-    // user, err := database.GetUserByID(h.MongoClient, userID) ...
-    
-    // 3. Return status
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusOK)
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "authenticated": true,
-        "user_id":       userID,
-        "message":       "User is logged in",
-    })
+	// Fetch full user details to get the Name
+	user, err := database.GetUserByID(h.MongoClient, userID)
+	userName := "Unknown"
+	if err == nil {
+		userName = user.Name
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"authenticated": true,
+		"user": map[string]string{
+			"id":   userID,
+			"name": userName,
+		},
+	})
 }
 
-// [UPDATED] Middleware now reads from Cookie
+// AuthMiddleware remains mostly the same, ensuring Cookie security
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. Try to get token from Cookie
 		cookie, err := r.Cookie("auth_token")
 		if err != nil {
 			http.Error(w, "Unauthorized: No session cookie", http.StatusUnauthorized)
 			return
 		}
 
-		tokenString := cookie.Value
-
-		// 2. Parse & Validate Token
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		token, err := jwt.Parse(cookie.Value, func(token *jwt.Token) (interface{}, error) {
 			return JWTSecret, nil
 		})
 
@@ -154,7 +161,7 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		userID, ok := claims["user_id"].(string)
 		if !ok {
-			http.Error(w, "Unauthorized: Missing user_id", http.StatusUnauthorized)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
@@ -163,9 +170,7 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// [NEW] Logout Handler (Clears the cookie and returns JSON)
 func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	// 1. Invalidate the Cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
 		Value:    "",
@@ -173,11 +178,6 @@ func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Path:     "/",
 	})
-
-	// 2. Return Success Message
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Logged out successfully",
-	})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Logged out"})
 }

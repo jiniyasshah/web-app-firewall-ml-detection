@@ -1,73 +1,104 @@
 services:
-  # Go Reverse Proxy Service
+  # ----------------------------------------------------------------
+  # 1. CORE WAF SERVICES
+  # ----------------------------------------------------------------
 
   go_gateway:
-    build: ./gateway # Path to Go gateway code
-
+    build: ./gateway
     container_name: go_gateway
-
     ports:
-      - "8080:8080" # Expose port 8080 for the Go reverse proxy
-
+      - "8080:8080"
     depends_on:
-      - origin # Depends on the Python server (instead of scorer)
-
+      - origin
+      - dns_db # Needs MariaDB to write DNS records
     environment:
+      # [CORRECTED] Uses your environment variable from .env
       - MONGO_URI=${MONGO_URI}
 
-      - ORIGIN_URL=http://origin:3000 # The Python server will be the origin for the proxy
+      - ORIGIN_URL=http://origin:3000
+      - ML_URL=http://ml_scorer:8000/predict
 
-  # Python Backend Service
+      # DNS Database Config (Local MariaDB)
+      - DNS_DB_HOST=dns_db
+      - DNS_DB_USER=pdns
+      - DNS_DB_PASS=pdns_password
+      - DNS_DB_NAME=powerdns
+    networks:
+      - waf_net
 
   origin:
-    build: ./test_server # Path to the Python server code
-
+    build: ./test_server
     container_name: test_server
-
     ports:
-      - "3000:3000" # Expose port 3000 for the Python server
-
+      - "3000:3000"
     restart: unless-stopped
-
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
-
       interval: 30s
-
       timeout: 5s
-
       retries: 3
-
-  # NGINX Reverse Proxy Service
-
-  nginx:
-    image: nginx:latest # Use the latest NGINX image
-
-    container_name: nginx_reverse_proxy
-
-    ports:
-      - "80:80" # Expose port 80 for HTTP
-
-      - "443:443" # Expose port 443 for HTTPS
-
-    depends_on:
-      - go_gateway # NGINX depends on the Go reverse proxy service
-
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf # Mount your custom NGINX config file
-
-      - ./certs:/etc/ssl/certs
-
-      - ./certs:/etc/ssl/private
-
-    restart: always
+    networks:
+      - waf_net
 
   ml_scorer:
     build: ./ml_scorer
-
     container_name: ml_scorer
-
     ports:
       - "8000:8000"
-
     restart: unless-stopped
+    networks:
+      - waf_net
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx_reverse_proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - go_gateway
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./certs:/etc/ssl/certs
+      - ./certs:/etc/ssl/private
+    restart: always
+    networks:
+      - waf_net
+
+  # ----------------------------------------------------------------
+  # 2. DNS INFRASTRUCTURE (Local)
+  # ----------------------------------------------------------------
+
+  # MariaDB: Stores the DNS Records
+  dns_db:
+    image: mariadb:10.11
+    container_name: dns_sql_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: powerdns
+      MYSQL_USER: pdns
+      MYSQL_PASSWORD: pdns_password
+    volumes:
+      - ./dns/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - dns_data:/var/lib/mysql
+    networks:
+      - waf_net
+
+  # PowerDNS: The actual Nameserver
+  pdns:
+    build: ./dns
+    container_name: dns_authority
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+    networks:
+      - waf_net
+    depends_on:
+      - dns_db
+    restart: always
+
+networks:
+  waf_net:
+
+volumes:
+  dns_data:
