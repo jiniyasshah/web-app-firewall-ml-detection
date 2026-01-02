@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +20,15 @@ var realNameservers = []string{
 	"jiniyas", "rabin", "niraj", "sabin", "rita", 
 	"sneha", "exam", "bikalpa", "raju", "dhiren", "sanket",
 }
+
+type DoHResponse struct {
+	Answer []struct {
+		Name string `json:"name"`
+		Type int    `json:"type"`
+		Data string `json:"data"`
+	} `json:"Answer"`
+}
+
 
 const nsSuffix = ".ns.minishield.tech"
 
@@ -63,8 +74,48 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(createdDomain)
 }
 
+// lookupNSWithCloudflareDoH performs NS lookup using Cloudflare's DNS-over-HTTPS
+func lookupNSWithCloudflareDoH(domain string) ([]string, error) {
+	ctx, cancel := context. WithTimeout(context. Background(), 15*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("https://cloudflare-dns.com/dns-query?name=%s&type=NS", domain)
+	
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/dns-json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io. ReadAll(resp. Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var dohResp DoHResponse
+	if err := json.Unmarshal(body, &dohResp); err != nil {
+		return nil, err
+	}
+
+	var nameservers []string
+	for _, answer := range dohResp.Answer {
+		if answer.Type == 2 { // NS record type
+			ns := strings.TrimSuffix(answer.Data, ".")
+			nameservers = append(nameservers, ns)
+		}
+	}
+
+	return nameservers, nil
+}
+
 // VerifyDomain checks if the user actually updated their NS records
-// Usage: POST /api/domains/verify? id=6956726f0553824e125d7cb8
 // VerifyDomain checks if the user actually updated their NS records
 func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -73,7 +124,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Get domain ID from query parameter
-	domainID := r.URL.Query().Get("id")
+	domainID := r.URL. Query().Get("id")
 	if domainID == "" {
 		http.Error(w, "Missing domain id", http.StatusBadRequest)
 		return
@@ -88,13 +139,13 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Security:  Ensure the user owns this domain
 	userID := r.Context().Value("user_id").(string)
-	if domain.UserID != userID {
+	if domain. UserID != userID {
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
-	// 4. Perform Live DNS Lookup
-	nss, err := net.LookupNS(domain.Name)
+	// 4. Perform Live DNS Lookup using Cloudflare DoH
+	nss, err := lookupNSWithCloudflareDoH(domain.Name)
 	if err != nil {
 		http.Error(w, "DNS Lookup failed:  "+err.Error(), http.StatusInternalServerError)
 		return
@@ -104,7 +155,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Compare Found NS with Assigned NS
 	for _, foundNS := range nss {
-		cleanFound := strings.TrimSuffix(foundNS. Host, ".")
+		cleanFound := strings.TrimSuffix(foundNS, ".")
 		for _, assignedNS := range domain. Nameservers {
 			if strings.EqualFold(cleanFound, assignedNS) {
 				verified = true
@@ -120,29 +171,26 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if verified {
-		// Update domain status in MongoDB
-		err := database.UpdateDomainStatus(h. MongoClient, domain.ID, "active", true)
+		err := database.UpdateDomainStatus(h.MongoClient, domain.ID, "active", true)
 		if err != nil {
 			http.Error(w, "DB Update failed", http.StatusInternalServerError)
 			return
 		}
 
-		// Create the zone in PowerDNS so user can add records
-		err = database.CreateDNSZone(domain. Name, domain. Nameservers)
+		err = database.CreateDNSZone(domain.Name, domain.Nameservers)
 		if err != nil {
-			// Log but don't fail - zone might already exist
-			log.Printf("Warning: Failed to create DNS zone:  %v", err)
+			log.Printf("Warning: Failed to create DNS zone: %v", err)
 		}
 
 		json.NewEncoder(w).Encode(map[string]string{
-			"status":   "active",
-			"message": "Domain successfully verified!  WAF protection enabled.",
+			"status":  "active",
+			"message": "Domain successfully verified! WAF protection enabled.",
 		})
 	} else {
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":        "pending_verification",
-			"message":       "Verification failed. We did not find the correct Nameservers.",
+			"message":       "Verification failed.  We did not find the correct Nameservers.",
 			"found_records": nss,
 		})
 	}
