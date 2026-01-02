@@ -1,41 +1,29 @@
 name: Auto Deploy to Server
 
 on:
-  push: 
-    branches: 
+  push:
+    branches:
       - test
 
 jobs:
-  deploy: 
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses:  actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/. ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/. ssh/known_hosts
-
-      - name:  Deploy via SSH
-        run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1. 0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
             cd /opt/waf
-            
-            # Pull latest changes
             git fetch origin test
             git reset --hard origin/test
-            
-            # Rebuild and restart containers
             docker compose down
             docker compose up --build -d
-            
-            # Clean up old images to save space
             docker image prune -f
-            
-            # Show status
             docker compose ps
-          EOF
