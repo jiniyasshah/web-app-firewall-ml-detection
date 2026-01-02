@@ -1,6 +1,6 @@
 services:
   # ----------------------------------------------------------------
-  # 1. CORE WAF SERVICES
+  # 1.  CORE WAF SERVICES
   # ----------------------------------------------------------------
 
   go_gateway:
@@ -9,16 +9,14 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - origin
-      - dns_db # Needs MariaDB to write DNS records
+      origin:
+        condition: service_started
+      dns_db:
+        condition: service_healthy # Wait for MariaDB to be healthy!
     environment:
-      # [CORRECTED] Uses your environment variable from .env
       - MONGO_URI=${MONGO_URI}
-
       - ORIGIN_URL=http://origin:3000
       - ML_URL=http://ml_scorer:8000/predict
-
-      # DNS Database Config (Local MariaDB)
       - DNS_DB_HOST=dns_db
       - DNS_DB_USER=pdns
       - DNS_DB_PASS=pdns_password
@@ -69,7 +67,6 @@ services:
   # 2. DNS INFRASTRUCTURE (Local)
   # ----------------------------------------------------------------
 
-  # MariaDB: Stores the DNS Records
   dns_db:
     image: mariadb:10.11
     container_name: dns_sql_db
@@ -79,13 +76,23 @@ services:
       MYSQL_USER: pdns
       MYSQL_PASSWORD: pdns_password
     volumes:
-      - ./dns/schema.sql:/docker-entrypoint-initdb. d/schema.sql
+      - ./dns/schema.sql:/docker-entrypoint-initdb.d/schema.sql
       - dns_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
+      test:
+        [
+          "CMD",
+          "mariadb-admin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-proot_password",
+        ]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 30s
     networks:
       - waf_net
@@ -100,7 +107,7 @@ services:
       - waf_net
     depends_on:
       dns_db:
-        condition: service_healthy # Wait for DB to be healthy
+        condition: service_healthy
     restart: always
 
 networks:

@@ -81,6 +81,7 @@ func GetUserByID(client *mongo.Client, id string) (*detector.User, error) {
 	return &user, nil
 }
 
+
 // ---------------------------------------------------------
 // DOMAIN MANAGEMENT
 // ---------------------------------------------------------
@@ -143,6 +144,7 @@ func GetDomainByID(client *mongo.Client, id string) (*detector.Domain, error) {
 	}
 	return &domain, nil
 }
+
 
 // ---------------------------------------------------------
 // RULE MANAGEMENT
@@ -362,6 +364,10 @@ func UpdateDomainStatus(client *mongo.Client, domainID, status string, proxied b
 	_, err := collection.UpdateOne(ctx, filter, update)
 	return err
 }
+
+
+
+
 // ---------------------------------------------------------
 // HELPERS
 // ---------------------------------------------------------

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -64,6 +65,7 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 
 // VerifyDomain checks if the user actually updated their NS records
 // Usage: POST /api/domains/verify? id=6956726f0553824e125d7cb8
+// VerifyDomain checks if the user actually updated their NS records
 func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -84,8 +86,8 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Security: Ensure the user owns this domain
-	userID := r. Context().Value("user_id").(string)
+	// 3. Security:  Ensure the user owns this domain
+	userID := r.Context().Value("user_id").(string)
 	if domain.UserID != userID {
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
@@ -94,7 +96,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	// 4. Perform Live DNS Lookup
 	nss, err := net.LookupNS(domain.Name)
 	if err != nil {
-		http.Error(w, "DNS Lookup failed: "+err. Error(), http.StatusInternalServerError)
+		http.Error(w, "DNS Lookup failed:  "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -102,7 +104,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Compare Found NS with Assigned NS
 	for _, foundNS := range nss {
-		cleanFound := strings.TrimSuffix(foundNS.Host, ".")
+		cleanFound := strings.TrimSuffix(foundNS. Host, ".")
 		for _, assignedNS := range domain. Nameservers {
 			if strings.EqualFold(cleanFound, assignedNS) {
 				verified = true
@@ -116,22 +118,31 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 
 	// 6. Update Status & Respond
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	if verified {
-		err := database.UpdateDomainStatus(h.MongoClient, domain.ID, "active", true)
+		// Update domain status in MongoDB
+		err := database.UpdateDomainStatus(h. MongoClient, domain.ID, "active", true)
 		if err != nil {
 			http.Error(w, "DB Update failed", http.StatusInternalServerError)
 			return
 		}
+
+		// Create the zone in PowerDNS so user can add records
+		err = database.CreateDNSZone(domain. Name, domain. Nameservers)
+		if err != nil {
+			// Log but don't fail - zone might already exist
+			log.Printf("Warning: Failed to create DNS zone:  %v", err)
+		}
+
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":   "active",
-			"message": "Domain successfully verified! WAF protection enabled.",
+			"message": "Domain successfully verified!  WAF protection enabled.",
 		})
 	} else {
-		w. WriteHeader(http.StatusConflict)
+		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":         "pending_verification",
-			"message":        "Verification failed. We did not find the correct Nameservers.",
+			"status":        "pending_verification",
+			"message":       "Verification failed. We did not find the correct Nameservers.",
 			"found_records": nss,
 		})
 	}
