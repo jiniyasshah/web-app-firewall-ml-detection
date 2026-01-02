@@ -118,7 +118,7 @@ func DeleteDNSRecord(recordID string) error {
 	_, err := dnsDB.Exec("DELETE FROM records WHERE id = ?", recordID)
 	return err
 }
-// Helper function to extract zone from full record name
+// Helper function to extract zone from full record
 func extractZone(recordName string) string {
 	// Simple implementation:  find the last two parts
 	// "www.api.example.com" -> "example.com"
