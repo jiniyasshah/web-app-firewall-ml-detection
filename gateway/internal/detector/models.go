@@ -13,9 +13,15 @@ type User struct {
 	Email    string `bson:"email" json:"email"`
 	Password string `bson:"password" json:"-"`          // Password is never output to JSON
 }
+// UserInput is for registration/login requests
+type UserInput struct {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
 
 type Domain struct {
-	ID          string    `bson:"_id,omitempty" json:"_id"`
+	ID          string    `bson:"_id,omitempty" json:"id"`
 	UserID      string    `bson:"user_id" json:"user_id"`
 	Name        string    `bson:"name" json:"name"`           // e.g. "myapp.com"
 	

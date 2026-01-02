@@ -26,10 +26,10 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := r.Context().Value("user_id").(string)
+	userID := r. Context().Value("user_id").(string)
 
 	var domain detector.Domain
-	if err := json.NewDecoder(r.Body).Decode(&domain); err != nil {
+	if err := json. NewDecoder(r.Body).Decode(&domain); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -48,80 +48,91 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 
 	domain.UserID = userID
 	domain.Nameservers = []string{ns1, ns2}
-	domain.Status = "pending_verification" // Start as pending
-	domain.Proxied = false                 // Disabled until verified
+	domain. Status = "pending_verification" // Start as pending
+	domain. Proxied = false                 // Disabled until verified
 
-	if err := database.CreateDomain(h.MongoClient, domain); err != nil {
+	// CreateDomain now returns the domain with ID and CreatedAt populated
+	createdDomain, err := database.CreateDomain(h.MongoClient, domain)
+	if err != nil {
 		http.Error(w, "Failed to create domain", http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(domain)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(createdDomain)
 }
 
-// [NEW] VerifyDomain checks if the user actually updated their NS records
+// VerifyDomain checks if the user actually updated their NS records
+// Usage: POST /api/domains/verify? id=6956726f0553824e125d7cb8
 func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
-	// 1. Parse Request
-	var req struct {
-		DomainID string `json:"domain_id"`
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON", 400); return
+
+	// 1. Get domain ID from query parameter
+	domainID := r.URL.Query().Get("id")
+	if domainID == "" {
+		http.Error(w, "Missing domain id", http.StatusBadRequest)
+		return
 	}
 
 	// 2. Fetch Domain from DB to get assigned NS
-	domain, err := database.GetDomainByID(h.MongoClient, req.DomainID)
+	domain, err := database.GetDomainByID(h.MongoClient, domainID)
 	if err != nil {
-		http.Error(w, "Domain not found", 404); return
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
 	}
 
-	// Security: Ensure the user owns this domain
-	userID := r.Context().Value("user_id").(string)
+	// 3. Security: Ensure the user owns this domain
+	userID := r. Context().Value("user_id").(string)
 	if domain.UserID != userID {
-		http.Error(w, "Unauthorized", 403); return
+		http.Error(w, "Unauthorized", http.StatusForbidden)
+		return
 	}
 
-	// 3. Perform Live DNS Lookup (The "Check")
-	// We ask the global internet: "What are the NS records for this domain?"
+	// 4. Perform Live DNS Lookup
 	nss, err := net.LookupNS(domain.Name)
 	if err != nil {
-		http.Error(w, "DNS Lookup failed: "+err.Error(), 500); return
+		http.Error(w, "DNS Lookup failed: "+err. Error(), http.StatusInternalServerError)
+		return
 	}
 
 	verified := false
-	
-	// 4. Compare Found NS with Assigned NS
-	// We look for at least one match
+
+	// 5. Compare Found NS with Assigned NS
 	for _, foundNS := range nss {
-		// Clean up string (DNS often returns trailing dot, e.g., "ns1.com.")
 		cleanFound := strings.TrimSuffix(foundNS.Host, ".")
-		
-		for _, assignedNS := range domain.Nameservers {
+		for _, assignedNS := range domain. Nameservers {
 			if strings.EqualFold(cleanFound, assignedNS) {
 				verified = true
 				break
 			}
 		}
-		if verified { break }
+		if verified {
+			break
+		}
 	}
 
-	// 5. Update Status
+	// 6. Update Status & Respond
+	w.Header().Set("Content-Type", "application/json")
+	
 	if verified {
 		err := database.UpdateDomainStatus(h.MongoClient, domain.ID, "active", true)
 		if err != nil {
-			http.Error(w, "DB Update failed", 500); return
+			http.Error(w, "DB Update failed", http.StatusInternalServerError)
+			return
 		}
 		json.NewEncoder(w).Encode(map[string]string{
-			"status": "active", 
+			"status":   "active",
 			"message": "Domain successfully verified! WAF protection enabled.",
 		})
 	} else {
-		// Just return failure, don't update DB
-		w.WriteHeader(http.StatusConflict)
+		w. WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "pending_verification",
-			"message": "Verification failed. We did not find the correct Nameservers.",
-			"found_records": nss, // Debug info for user
+			"status":         "pending_verification",
+			"message":        "Verification failed. We did not find the correct Nameservers.",
+			"found_records": nss,
 		})
 	}
 }

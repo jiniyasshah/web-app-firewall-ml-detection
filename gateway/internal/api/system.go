@@ -21,7 +21,6 @@ type ComponentStatus struct {
 
 func (h *APIHandler) SystemStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	statusMap := make(map[string]ComponentStatus)
 

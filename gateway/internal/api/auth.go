@@ -22,14 +22,15 @@ func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var input detector.User
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	// Use UserInput for decoding the request
+	var input detector.UserInput
+	if err := json. NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "Invalid JSON Body", http.StatusBadRequest)
 		return
 	}
 
 	// Basic Validation
-	if input.Email == "" || input.Password == "" || input.Name == "" {
+	if input.Email == "" || input. Password == "" || input.Name == "" {
 		http.Error(w, "Name, Email and Password are required", http.StatusBadRequest)
 		return
 	}
@@ -40,16 +41,22 @@ func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Server Error", http.StatusInternalServerError)
 		return
 	}
-	input.Password = string(hashed)
+
+	// Create User struct for database
+	user := detector.User{
+		Name:     input.Name,
+		Email:    input. Email,
+		Password: string(hashed),
+	}
 
 	// Save to DB
-	if err := database.CreateUser(h.MongoClient, input); err != nil {
-		http.Error(w, "Registration failed: "+err.Error(), http.StatusBadRequest)
+	if err := database.CreateUser(h.MongoClient, user); err != nil {
+		http.Error(w, "Registration failed:  "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"message": "User registered successfully"})
+	json.NewEncoder(w).Encode(map[string]string{"message":  "User registered successfully"})
 }
 
 func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -58,8 +65,9 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var input detector.User
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	// Use UserInput instead of User
+	var input detector.UserInput
+	if err := json. NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "Invalid JSON Body", http.StatusBadRequest)
 		return
 	}
@@ -70,15 +78,15 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(user. Password), []byte(input.Password)); err != nil {
 		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
 		return
 	}
 
 	// Generate JWT
 	expiration := time.Now().Add(24 * time.Hour)
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": user.ID,
+	token := jwt. NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id":  user.ID,
 		"email":   user.Email,
 		"exp":     expiration.Unix(),
 	})
@@ -96,14 +104,14 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Expires:  expiration,
 		HttpOnly: true,
 		Secure:   false, // Set true in production (HTTPS)
-		SameSite: http.SameSiteLaxMode,
+		SameSite:  http.SameSiteLaxMode,
 		Path:     "/",
 	})
 
-	// Return User Info (including Name)
+	// Return User Info
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Login successful",
-		"user": map[string]string{
+		"user":  map[string]string{
 			"id":    user.ID,
 			"name":  user.Name,
 			"email": user.Email,

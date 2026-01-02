@@ -128,9 +128,11 @@ func main() {
 	// Domains
 	mux.HandleFunc("/api/domains", api.AuthMiddleware(apiHandler.ListDomains))
 	mux.HandleFunc("/api/domains/add", api.AuthMiddleware(apiHandler.AddDomain))
+	mux.HandleFunc("/api/domains/verify", api.AuthMiddleware(apiHandler.VerifyDomain))
 
 	// DNS Records - [NEW ROUTE]
 	mux.HandleFunc("/api/dns/records", api.AuthMiddleware(apiHandler.AddRecord))
+	
 
 	// Rules
 	mux.HandleFunc("/api/rules/global", api.AuthMiddleware(apiHandler.GetGlobalRules))

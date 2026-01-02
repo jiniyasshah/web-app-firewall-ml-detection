@@ -85,16 +85,21 @@ func GetUserByID(client *mongo.Client, id string) (*detector.User, error) {
 // DOMAIN MANAGEMENT
 // ---------------------------------------------------------
 
-func CreateDomain(client *mongo.Client, domain detector.Domain) error {
-	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+func CreateDomain(client *mongo.Client, domain detector.Domain) (detector.Domain, error) {
+	ctx, cancel := context. WithTimeout(context. Background(), TimeoutDuration)
 	defer cancel()
 
 	if domain.ID == "" {
-		domain.ID = primitive.NewObjectID().Hex()
+		domain. ID = primitive.NewObjectID().Hex()
 	}
 	domain.CreatedAt = time.Now()
+
 	_, err := client.Database(DBName).Collection("domains").InsertOne(ctx, domain)
-	return err
+	if err != nil {
+		return detector.Domain{}, err
+	}
+
+	return domain, nil
 }
 
 func GetDomainsByUser(client *mongo.Client, userID string) ([]detector.Domain, error) {

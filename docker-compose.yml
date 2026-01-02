@@ -79,12 +79,17 @@ services:
       MYSQL_USER: pdns
       MYSQL_PASSWORD: pdns_password
     volumes:
-      - ./dns/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./dns/schema.sql:/docker-entrypoint-initdb. d/schema.sql
       - dns_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - waf_net
 
-  # PowerDNS: The actual Nameserver
   pdns:
     build: ./dns
     container_name: dns_authority
@@ -94,7 +99,8 @@ services:
     networks:
       - waf_net
     depends_on:
-      - dns_db
+      dns_db:
+        condition: service_healthy # Wait for DB to be healthy
     restart: always
 
 networks:
