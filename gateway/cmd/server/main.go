@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -13,6 +15,8 @@ import (
 	"web-app-firewall-ml-detection/internal/database"
 	"web-app-firewall-ml-detection/internal/limiter"
 	"web-app-firewall-ml-detection/internal/logger"
+
+	"golang.org/x/crypto/acme/autocert"
 )
 
 // getEnv handles fallback values for environment variables
@@ -26,6 +30,7 @@ func getEnv(key, fallback string) string {
 // CORSMiddleware handles Preflight and Headers
 func CORSMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Adjust this if you want to lock down CORS to specific domains
 		w.Header().Set("Access-Control-Allow-Origin", getEnv("FRONTEND_URL", "http://localhost:3001"))
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -105,7 +110,7 @@ func main() {
 
 		// C. Pass original host header
 		req.Header.Set("X-Forwarded-Host", incomingHost)
-		req.Header.Set("X-Forwarded-Proto", "http") 
+		req.Header.Set("X-Forwarded-Proto", "https") // We are now HTTPS!
 		req.Header.Set("X-Real-IP", req.RemoteAddr)
 	}
 
@@ -142,8 +147,60 @@ func main() {
 	// --- Traffic Handler ---
 	mux.HandleFunc("/", apiHandler.WAFHandler)
 
-	// 8. START SERVER
-	port := getEnv("PORT", "8080")
-	log.Printf("Gateway running on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, CORSMiddleware(mux)))
+	// ---------------------------------------------------------
+	// 8. HTTPS AUTO-CERT CONFIGURATION (The Magic Part)
+	// ---------------------------------------------------------
+
+	// The HostPolicy checks MongoDB to ensure we only generate certs 
+	// for domains that actually belong to our users.
+	hostPolicy := func(ctx context.Context, host string) error {
+		// 1. Allow our own API/Dashboard domain (Adjust these to match your frontend!)
+		if host == "api.minishield.tech" || host == "dashboard.minishield.tech" {
+			return nil
+		}
+
+		// 2. Check if the domain exists in our MongoDB
+		// We use GetRoutingByHost because it efficiently checks if a domain is registered
+		_, err := database.GetRoutingByHost(client, host)
+		if err != nil {
+			// Domain not found in our DB -> Reject Certificate Generation
+			return fmt.Errorf("host %s not allowed", host)
+		}
+
+		return nil
+	}
+
+	certManager := autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: hostPolicy,
+		Cache:      autocert.DirCache("certs"), // Save certs to disk
+	}
+
+	// Create a custom server for HTTPS
+	httpsServer := &http.Server{
+		Addr:    ":443",
+		Handler: CORSMiddleware(mux),
+		TLSConfig: &tls.Config{
+			GetCertificate: certManager.GetCertificate,
+		},
+	}
+
+	// ---------------------------------------------------------
+	// 9. START SERVERS
+	// ---------------------------------------------------------
+
+	// A. HTTP Server (Port 80)
+	// This handles the ACME Challenge for Let's Encrypt AND redirects users to HTTPS
+	go func() {
+		log.Println("✅ Starting HTTP Server on :80 (ACME Challenge + Redirect)")
+		if err := http.ListenAndServe(":80", certManager.HTTPHandler(nil)); err != nil {
+			log.Fatalf("HTTP Server Failed: %v", err)
+		}
+	}()
+
+	// B. HTTPS Server (Port 443)
+	log.Println("🔒 Starting HTTPS WAF on :443 (Auto-Cert Enabled)")
+	if err := httpsServer.ListenAndServeTLS("", ""); err != nil {
+		log.Fatalf("HTTPS Server Failed: %v", err)
+	}
 }
