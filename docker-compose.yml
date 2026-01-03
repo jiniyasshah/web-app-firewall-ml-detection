@@ -57,8 +57,7 @@ services:
       - go_gateway
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./certs:/etc/ssl/certs
-      - ./certs:/etc/ssl/private
+      - /etc/letsencrypt:/etc/letsencrypt
     restart: always
     networks:
       - waf_net
