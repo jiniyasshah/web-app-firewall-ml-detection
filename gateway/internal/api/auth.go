@@ -117,7 +117,7 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 		
 		// Dynamic Settings
 		Domain:   cookieDomain,
-		Secure:   isProd,               // True in Prod (HTTPS), False in Dev (HTTP)
+		Secure:   true,               // True in Prod (HTTPS), False in Dev (HTTP)
 		SameSite: http.SameSiteLaxMode, // Lax is best for normal navigation
 	})
 
@@ -212,8 +212,9 @@ func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
         HttpOnly: true,
         Path:     "/",
         Domain:   cookieDomain,    // Crucial: Match the domain!
-        Secure:   isProd,          // Crucial: Match the Secure flag!
+        Secure:   true,         // Crucial: Match the Secure flag!
         SameSite: http.SameSiteLaxMode,
+		
     })
 
     w.WriteHeader(http.StatusOK)
