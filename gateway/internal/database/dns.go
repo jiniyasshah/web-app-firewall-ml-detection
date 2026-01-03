@@ -100,7 +100,7 @@ func GetDNSRecordsByDomain(domainName string) ([]map[string]interface{}, error) 
 		records = append(records, map[string]interface{}{
 			"id":      id,
 			"name":    name,
-			"type":     recordType,
+			"type":    recordType,
 			"content": content,
 			"ttl":     ttl,
 		})
@@ -118,6 +118,7 @@ func DeleteDNSRecord(recordID string) error {
 	_, err := dnsDB.Exec("DELETE FROM records WHERE id = ?", recordID)
 	return err
 }
+
 // Helper function to extract zone from full record
 func extractZone(recordName string) string {
 	// Simple implementation:  find the last two parts
@@ -177,7 +178,8 @@ func CreateDNSZone(domainName string, nameservers []string) error {
 	}
 
 	// Add SOA record (required for every zone)
-	soaContent := fmt.Sprintf("%s.hostmaster.%s.1 10800 3600 604800 3600",
+	// FIX: Added space between MNAME and RNAME (nameserver and hostmaster)
+	soaContent := fmt.Sprintf("%s hostmaster.%s 1 10800 3600 604800 3600",
 		nameservers[0], domainName)
 	
 	_, err = dnsDB.Exec(`

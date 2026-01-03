@@ -29,8 +29,17 @@ type DoHResponse struct {
 	} `json:"Answer"`
 }
 
-
 const nsSuffix = ".ns.minishield.tech"
+
+// getRootDomain extracts the TLD+1 (e.g., "test.example.com" -> "example.com")
+func getRootDomain(domain string) string {
+	parts := strings.Split(domain, ".")
+	if len(parts) < 2 {
+		return domain
+	}
+	// Takes the last two parts (e.g. lemepush.tech)
+	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+}
 
 func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -46,12 +55,32 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1.Assign 2 Random Real Nameservers
-	// In production, you might want to cycle these round-robin
+	// ---------------------------------------------------------
+	// 1. STRICT SUBDOMAIN POLICY CHECK
+	// ---------------------------------------------------------
+	rootZone := getRootDomain(domain.Name)
+
+	// If the user is trying to add a subdomain (e.g. test.lemepush.tech)
+	// Check if the root (lemepush.tech) already exists in the system.
+	if rootZone != domain.Name {
+		existingRoot, err := database.GetDomainByName(h.MongoClient, rootZone)
+		// If no error, it means we found the root domain!
+		if err == nil && existingRoot != nil {
+			w.WriteHeader(http.StatusConflict) // 409 Conflict
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":   "Root domain exists",
+				"message": fmt.Sprintf("The root domain '%s' is already registered. Please add '%s' as an A Record under DNS Settings instead of creating a new Domain.", rootZone, domain.Name),
+			})
+			return
+		}
+	}
+	// ---------------------------------------------------------
+
+	// 2. Assign 2 Random Real Nameservers
 	rand.Seed(time.Now().UnixNano())
 	idx1 := rand.Intn(len(realNameservers))
 	idx2 := rand.Intn(len(realNameservers))
-	for idx1 == idx2 { // Ensure they are different
+	for idx1 == idx2 {
 		idx2 = rand.Intn(len(realNameservers))
 	}
 
@@ -60,14 +89,37 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 
 	domain.UserID = userID
 	domain.Nameservers = []string{ns1, ns2}
-	domain.Status = "pending_verification" // Start as pending
-	domain.Proxied = false                 // Disabled until verified
+	domain.Status = "pending_verification"
+	domain.Proxied = false
 
-	// CreateDomain now returns the domain with ID and CreatedAt populated
+	// 3. Save to MongoDB (Internal Routing & UI)
 	createdDomain, err := database.CreateDomain(h.MongoClient, domain)
 	if err != nil {
-		http.Error(w, "Failed to create domain", http.StatusInternalServerError)
+		// Handle duplicate key error (if they try to add exact same domain again)
+		if strings.Contains(err.Error(), "duplicate key") {
+			http.Error(w, "Domain already exists", http.StatusConflict)
+			return
+		}
+		http.Error(w, "Failed to create domain in DB", http.StatusInternalServerError)
 		return
+	}
+
+	// 4. Provision PowerDNS (Zone + Fixed A Record)
+	// Since we passed the strict check, we treat this as a NEW ZONE.
+	
+	// A. Create the Zone
+	err = database.CreateDNSZone(domain.Name, domain.Nameservers)
+	if err != nil {
+		log.Printf("ERROR: Failed to create DNS Zone for %s: %v", domain.Name, err)
+	} else {
+		// B. Create the Fixed A Record (Public DNS -> WAF IP)
+		// We use h.WafPublicIP which is loaded from ENV
+		err = database.AddDNSRecord(domain.Name, "A", h.WafPublicIP, false, "")
+		if err != nil {
+			log.Printf("ERROR: Failed to create default A record for %s: %v", domain.Name, err)
+		} else {
+			log.Printf("SUCCESS: Provisioned DNS for %s -> %s", domain.Name, h.WafPublicIP)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -116,44 +168,43 @@ func lookupNSWithCloudflareDoH(domain string) ([]string, error) {
 }
 
 // VerifyDomain checks if the user actually updated their NS records
-// VerifyDomain checks if the user actually updated their NS records
 func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 1.Get domain ID from query parameter
+	// 1. Get domain ID from query parameter
 	domainID := r.URL.Query().Get("id")
 	if domainID == "" {
 		http.Error(w, "Missing domain id", http.StatusBadRequest)
 		return
 	}
 
-	// 2.Fetch Domain from DB to get assigned NS
+	// 2. Fetch Domain from DB to get assigned NS
 	domain, err := database.GetDomainByID(h.MongoClient, domainID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
 	}
 
-	// 3.Security:  Ensure the user owns this domain
+	// 3. Security: Ensure the user owns this domain
 	userID := r.Context().Value("user_id").(string)
 	if domain.UserID != userID {
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
-	// 4.Perform Live DNS Lookup using Cloudflare DoH
+	// 4. Perform Live DNS Lookup using Cloudflare DoH
 	nss, err := lookupNSWithCloudflareDoH(domain.Name)
 	if err != nil {
-		http.Error(w, "DNS Lookup failed:  "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "DNS Lookup failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	verified := false
 
-	// 5.Compare Found NS with Assigned NS
+	// 5. Compare Found NS with Assigned NS
 	for _, foundNS := range nss {
 		cleanFound := strings.TrimSuffix(foundNS, ".")
 		for _, assignedNS := range domain.Nameservers {
@@ -167,7 +218,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 6.Update Status & Respond
+	// 6. Update Status & Respond
 	w.Header().Set("Content-Type", "application/json")
 
 	if verified {
@@ -175,11 +226,6 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			http.Error(w, "DB Update failed", http.StatusInternalServerError)
 			return
-		}
-
-		err = database.CreateDNSZone(domain.Name, domain.Nameservers)
-		if err != nil {
-			log.Printf("Warning: Failed to create DNS zone: %v", err)
 		}
 
 		json.NewEncoder(w).Encode(map[string]string{

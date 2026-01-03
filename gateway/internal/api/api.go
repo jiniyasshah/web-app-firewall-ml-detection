@@ -21,8 +21,9 @@ type APIHandler struct {
 	Proxy       *httputil.ReverseProxy
 	RateLimiter *limiter.RateLimiter
 
-	MLURL     string
-	OriginURL string
+	MLURL        string
+	OriginURL    string
+	WafPublicIP  string // [NEW] The Droplet IP to use for A records
 
 	// RULES CACHE
 	rulesMutex sync.RWMutex
@@ -37,14 +38,15 @@ type APIHandler struct {
 }
 
 // NewAPIHandler initializes the handler and loads initial rules
-func NewAPIHandler(client *mongo.Client, proxy *httputil.ReverseProxy, limiter *limiter.RateLimiter, mlURL, originURL string) *APIHandler {
+func NewAPIHandler(client *mongo.Client, proxy *httputil.ReverseProxy, limiter *limiter.RateLimiter, mlURL, originURL, wafPublicIP string) *APIHandler {
 	h := &APIHandler{
-		MongoClient: client,
-		Proxy:       proxy,
-		RateLimiter: limiter,
-		MLURL:       mlURL,
-		OriginURL:   originURL,
-		domainRules: make(map[string][]detector.WAFRule),
+		MongoClient:  client,
+		Proxy:        proxy,
+		RateLimiter:  limiter,
+		MLURL:        mlURL,
+		OriginURL:    originURL,
+		WafPublicIP:  wafPublicIP,
+		domainRules:  make(map[string][]detector.WAFRule),
 	}
 	
 	// Load rules immediately on startup
@@ -56,36 +58,32 @@ func NewAPIHandler(client *mongo.Client, proxy *httputil.ReverseProxy, limiter *
 	return h
 }
 
-// ReloadRules: The Brain.Merges Global Rules, Private Rules, and Policies.
+// ReloadRules: The Brain. Merges Global Rules, Private Rules, and Policies.
 func (h *APIHandler) ReloadRules() {
 	h.rulesMutex.Lock()
 	defer h.rulesMutex.Unlock()
 
-	// 1.Fetch All Data
-	// Fetch ALL rules (Global + Custom)
+	// 1. Fetch All Data
 	allRules, err := database.GetRules(h.MongoClient, bson.M{}) 
 	if err != nil {
 		log.Printf("[ERROR] ReloadRules: Failed to load rules: %v", err)
 		return
 	}
 
-	// Fetch ALL policies (Global + User specific)
 	policies, err := database.GetAllPolicies(h.MongoClient)
 	if err != nil {
 		log.Printf("[ERROR] ReloadRules: Failed to load policies: %v", err)
 		return
 	}
 
-	// Fetch ALL domains
 	domains, err := database.GetAllDomains(h.MongoClient)
 	if err != nil {
 		log.Printf("[ERROR] ReloadRules: Failed to load domains: %v", err)
 		return
 	}
 
-	// 2.Separate Global vs Private Rules
+	// 2. Separate Global vs Private Rules
 	globalRules := []detector.WAFRule{}
-	// Map[OwnerID] -> []Rules
 	privateRules := make(map[string][]detector.WAFRule)
 
 	for _, r := range allRules {
@@ -96,29 +94,26 @@ func (h *APIHandler) ReloadRules() {
 		}
 	}
 
-	// 3.Index Policies for fast lookup
-	// policyKey is defined in rules.go (shared package type)
+	// 3. Index Policies for fast lookup
 	policyMap := make(map[policyKey]bool)
 	for _, p := range policies {
 		policyMap[policyKey{RuleID: p.RuleID, DomainID: p.DomainID}] = p.Enabled
 	}
 
-	// 4.Build Effective Ruleset per Domain
+	// 4. Build Effective Ruleset per Domain
 	newDomainRules := make(map[string][]detector.WAFRule)
 
 	for _, d := range domains {
 		var effective []detector.WAFRule
 
-		// A.Add Global Rules (if not disabled by policy)
+		// A. Add Global Rules
 		for _, r := range globalRules {
-			// Check if THIS user (d.UserID) has disabled this Global Rule for THIS domain (d.ID)
-			// Note: We use isEnabled logic which checks specific domain policy -> generic user policy -> default
 			if isEnabled(r.ID, d.ID, policyMap, true) {
 				effective = append(effective, r)
 			}
 		}
 
-		// B.Add User's Private Rules
+		// B. Add User's Private Rules
 		if userRules, ok := privateRules[d.UserID]; ok {
 			for _, r := range userRules {
 				if isEnabled(r.ID, d.ID, policyMap, true) {
@@ -130,23 +125,17 @@ func (h *APIHandler) ReloadRules() {
 		newDomainRules[d.Name] = effective
 	}
 
-	// 5.Update Handler Cache
+	// 5. Update Handler Cache
 	h.domainRules = newDomainRules
-	h.globalFallback = globalRules // Raw global rules as fallback
+	h.globalFallback = globalRules
 
-	log.Printf("♻️  Rules Reloaded.Configured %d domains with effective rulesets.", len(h.domainRules))
+	log.Printf("♻️  Rules Reloaded. Configured %d domains with effective rulesets.", len(h.domainRules))
 }
 
-// isEnabled helper checks policy precedence:
-// 1.Specific Domain Policy
-// 2.Generic "All Domains" Policy (DomainID == "")
-// 3.Default Value
 func isEnabled(ruleID, domainID string, policies map[policyKey]bool, def bool) bool {
-	// Check specific domain policy
 	if status, exists := policies[policyKey{RuleID: ruleID, DomainID: domainID}]; exists {
 		return status
 	}
-	// Check generic "all domains" policy
 	if status, exists := policies[policyKey{RuleID: ruleID, DomainID: ""}]; exists {
 		return status
 	}
