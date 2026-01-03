@@ -137,11 +137,15 @@ func main() {
 			return nil
 		}
 
-		// 2. Allow User Domains (Check MongoDB)
-		_, err := database.GetRoutingByHost(client, host)
-		if err != nil {
+		// 2. Allow User Domains (Check if Domain EXISTS, don't worry about routing yet)
+		// We use GetDomainByName instead of GetRoutingByHost to allow SSL for
+		// domains that are added but not yet fully configured/routed.
+		foundDomain, err := database.GetDomainByName(client, host)
+		if err != nil || foundDomain == nil {
+			// Domain not found in our DB -> Reject Certificate Generation
 			return fmt.Errorf("host %s not allowed", host)
 		}
+
 		return nil
 	}
 
