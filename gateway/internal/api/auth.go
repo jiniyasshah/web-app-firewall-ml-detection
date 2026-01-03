@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
-
 	"web-app-firewall-ml-detection/internal/database"
 	"web-app-firewall-ml-detection/internal/detector"
 
@@ -97,15 +97,28 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set HttpOnly Cookie
+	// Determine if we are in Production
+	isProd := os.Getenv("APP_ENV") == "production"
+
+	// Dynamic Domain Logic:
+	// - Prod: ".minishield.tech" (Allows cookie sharing between api. and www.)
+	// - Dev:  "" (Empty string defaults to "Host Only", required for localhost)
+	cookieDomain := ""
+	if isProd {
+		cookieDomain = ".minishield.tech"
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
 		Value:    tokenString,
 		Expires:  expiration,
 		HttpOnly: true,
-		Secure:   false, // Set true in production (HTTPS)
-		SameSite:  http.SameSiteLaxMode,
 		Path:     "/",
+		
+		// Dynamic Settings
+		Domain:   cookieDomain,
+		Secure:   isProd,               // True in Prod (HTTPS), False in Dev (HTTP)
+		SameSite: http.SameSiteLaxMode, // Lax is best for normal navigation
 	})
 
 	// Return User Info
@@ -179,13 +192,30 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     "auth_token",
-		Value:    "",
-		Expires:  time.Unix(0, 0),
-		HttpOnly: true,
-		Path:     "/",
-	})
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Logged out"})
+    // 1. Determine Environment (MUST match Login logic)
+    isProd := os.Getenv("APP_ENV") == "production"
+
+    cookieDomain := ""
+    if isProd {
+        cookieDomain = ".minishield.tech"
+    }
+
+    // 2. Clear the Cookie
+    // We set the same Name, Path, Domain, Secure, and HttpOnly attributes.
+    // We only change Value to "" and Expires to a past date.
+    http.SetCookie(w, &http.Cookie{
+        Name:     "auth_token",
+        Value:    "",              // Empty value
+        Expires:  time.Unix(0, 0), // Expire immediately (1970)
+        
+        // These MUST match what you set in Login:
+        HttpOnly: true,
+        Path:     "/",
+        Domain:   cookieDomain,    // Crucial: Match the domain!
+        Secure:   isProd,          // Crucial: Match the Secure flag!
+        SameSite: http.SameSiteLaxMode,
+    })
+
+    w.WriteHeader(http.StatusOK)
+    json.NewEncoder(w).Encode(map[string]string{"message": "Logged out"})
 }
