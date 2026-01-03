@@ -30,7 +30,7 @@ func getEnv(key, fallback string) string {
 // CORSMiddleware handles Preflight and Headers
 func CORSMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", getEnv("FRONTEND_URL", "https://waf-dashboard-eight.vercel.app"))
+		w.Header().Set("Access-Control-Allow-Origin", getEnv("FRONTEND_URL", "https://dashboard.minishield.tech"))
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
