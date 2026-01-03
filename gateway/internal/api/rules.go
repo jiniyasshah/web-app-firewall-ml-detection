@@ -18,25 +18,25 @@ type policyKey struct {
 
 // Helper to determine if a rule is enabled based on user policies
 func resolveEnabledStatus(ruleID, domainID string, policies map[policyKey]bool, defaultState bool) bool {
-	// 1. Check Specific Domain Policy
+	// 1.Check Specific Domain Policy
 	if enabled, exists := policies[policyKey{RuleID: ruleID, DomainID: domainID}]; exists {
 		return enabled
 	}
-	// 2. Check Global User Policy (DomainID empty)
+	// 2.Check Global User Policy (DomainID empty)
 	if enabled, exists := policies[policyKey{RuleID: ruleID, DomainID: ""}]; exists {
 		return enabled
 	}
-	// 3. Fallback
+	// 3.Fallback
 	return defaultState
 }
 
-// --- 1. GLOBAL RULES (System Managed) ---
+// --- 1.GLOBAL RULES (System Managed) ---
 
 func (h *APIHandler) GetGlobalRules(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id").(string)
 	domainID := r.URL.Query().Get("domain_id")
 
-	// 1. Fetch only Global Rules (OwnerID is empty/null)
+	// 1.Fetch only Global Rules (OwnerID is empty/null)
 	rules, err := database.GetRules(h.MongoClient, bson.M{
 		"$or": []bson.M{
 			{"owner_id": ""},
@@ -48,20 +48,20 @@ func (h *APIHandler) GetGlobalRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Fetch only THIS user's policies
+	// 2.Fetch only THIS user's policies
 	policies, err := database.GetPoliciesByUser(h.MongoClient, userID)
 	if err != nil {
 		http.Error(w, "Failed to fetch policies", http.StatusInternalServerError)
 		return
 	}
 
-	// 3. Map Policies
+	// 3.Map Policies
 	userPolicies := make(map[policyKey]bool)
 	for _, p := range policies {
 		userPolicies[policyKey{RuleID: p.RuleID, DomainID: p.DomainID}] = p.Enabled
 	}
 
-	// 4. Hydrate Response
+	// 4.Hydrate Response
 	for i := range rules {
 		rules[i].Enabled = resolveEnabledStatus(rules[i].ID, domainID, userPolicies, true)
 	}
@@ -70,33 +70,33 @@ func (h *APIHandler) GetGlobalRules(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(rules)
 }
 
-// --- 2. CUSTOM RULES (User Managed) ---
+// --- 2.CUSTOM RULES (User Managed) ---
 
 func (h *APIHandler) GetCustomRules(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id").(string)
 	domainID := r.URL.Query().Get("domain_id")
 
-	// 1. Fetch only Custom Rules owned by this user
+	// 1.Fetch only Custom Rules owned by this user
 	rules, err := database.GetRules(h.MongoClient, bson.M{"owner_id": userID})
 	if err != nil {
 		http.Error(w, "Failed to fetch rules", http.StatusInternalServerError)
 		return
 	}
 
-	// 2. Fetch policies
+	// 2.Fetch policies
 	policies, err := database.GetPoliciesByUser(h.MongoClient, userID)
 	if err != nil {
 		http.Error(w, "Failed to fetch policies", http.StatusInternalServerError)
 		return
 	}
 
-	// 3. Map Policies
+	// 3.Map Policies
 	userPolicies := make(map[policyKey]bool)
 	for _, p := range policies {
 		userPolicies[policyKey{RuleID: p.RuleID, DomainID: p.DomainID}] = p.Enabled
 	}
 
-	// 4. Hydrate Response
+	// 4.Hydrate Response
 	for i := range rules {
 		// Custom rules default to true if no policy exists
 		rules[i].Enabled = resolveEnabledStatus(rules[i].ID, domainID, userPolicies, true)
@@ -162,7 +162,7 @@ func (h *APIHandler) DeleteCustomRule(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Rule deleted"})
 }
 
-// --- 3. SHARED ACTIONS ---
+// --- 3.SHARED ACTIONS ---
 
 func (h *APIHandler) ToggleRule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

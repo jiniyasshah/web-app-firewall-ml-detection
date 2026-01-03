@@ -14,11 +14,11 @@ func CheckRequest(r *http.Request, rules []WAFRule, isRateLimited bool) (int, []
     var triggeredTags []string
     forceBlock := false
 
-    // 1. Read Body
+    // 1.Read Body
     bodyBytes, _ := io.ReadAll(r.Body)
     r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
     
-    // 2. Construct Payload
+    // 2.Construct Payload
     decodedPath, _ := url.QueryUnescape(r.URL.Path)
     decodedQuery, _ := url.QueryUnescape(r.URL.RawQuery)
     combinedPayload := decodedPath + " " + decodedQuery + " " + string(bodyBytes)
@@ -26,7 +26,7 @@ func CheckRequest(r *http.Request, rules []WAFRule, isRateLimited bool) (int, []
     paramCount := len(r.URL.Query())
     bodyLen := len(bodyBytes)
 
-	// 3. Iterate Rules
+	// 3.Iterate Rules
 	for _, rule := range rules {
 		matched := true
 		for _, cond := range rule.Conditions {

@@ -24,13 +24,13 @@ func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	// Use UserInput for decoding the request
 	var input detector.UserInput
-	if err := json. NewDecoder(r.Body).Decode(&input); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "Invalid JSON Body", http.StatusBadRequest)
 		return
 	}
 
 	// Basic Validation
-	if input.Email == "" || input. Password == "" || input.Name == "" {
+	if input.Email == "" || input.Password == "" || input.Name == "" {
 		http.Error(w, "Name, Email and Password are required", http.StatusBadRequest)
 		return
 	}
@@ -45,7 +45,7 @@ func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// Create User struct for database
 	user := detector.User{
 		Name:     input.Name,
-		Email:    input. Email,
+		Email:    input.Email,
 		Password: string(hashed),
 	}
 
@@ -67,7 +67,7 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	// Use UserInput instead of User
 	var input detector.UserInput
-	if err := json. NewDecoder(r.Body).Decode(&input); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "Invalid JSON Body", http.StatusBadRequest)
 		return
 	}
@@ -78,14 +78,14 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user. Password), []byte(input.Password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
 		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
 		return
 	}
 
 	// Generate JWT
 	expiration := time.Now().Add(24 * time.Hour)
-	token := jwt. NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":  user.ID,
 		"email":   user.Email,
 		"exp":     expiration.Unix(),

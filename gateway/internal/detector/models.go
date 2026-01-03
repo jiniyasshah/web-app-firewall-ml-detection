@@ -23,7 +23,7 @@ type UserInput struct {
 type Domain struct {
 	ID          string    `bson:"_id,omitempty" json:"id"`
 	UserID      string    `bson:"user_id" json:"user_id"`
-	Name        string    `bson:"name" json:"name"`           // e.g.  "myapp.com"
+	Name        string    `bson:"name" json:"name"`           // e.g. "myapp.com"
 	Nameservers []string  `bson:"nameservers" json:"nameservers"`
 	Status      string    `bson:"status" json:"status"`       // "pending_verification", "active"
 	Proxied     bool      `bson:"proxied" json:"proxied"`     // Is WAF enabled for this domain?
@@ -34,8 +34,8 @@ type Domain struct {
 type DNSRecord struct {
 	ID        string `bson:"_id,omitempty" json:"id"`
 	DomainID  string `bson:"domain_id" json:"domain_id"`
-	Name      string `bson:"name" json:"name"`         // e.g.  "@", "www", "api"
-	Type      string `bson:"type" json:"type"`         // "A", "CNAME", "MX", etc. 
+	Name      string `bson:"name" json:"name"`         // e.g. "@", "www", "api"
+	Type      string `bson:"type" json:"type"`         // "A", "CNAME", "MX", etc.
 	Content   string `bson:"content" json:"content"`   // "1.2.3.4" or "example.com"
 	TTL       int    `bson:"ttl" json:"ttl"`           // 300, 3600, etc.
 	Proxied   bool   `bson:"proxied" json:"proxied"`   // Is this record protected by WAF?

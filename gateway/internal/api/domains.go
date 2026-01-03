@@ -38,15 +38,15 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := r. Context().Value("user_id").(string)
+	userID := r.Context().Value("user_id").(string)
 
 	var domain detector.Domain
-	if err := json. NewDecoder(r.Body).Decode(&domain); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&domain); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	// 1. Assign 2 Random Real Nameservers
+	// 1.Assign 2 Random Real Nameservers
 	// In production, you might want to cycle these round-robin
 	rand.Seed(time.Now().UnixNano())
 	idx1 := rand.Intn(len(realNameservers))
@@ -60,8 +60,8 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 
 	domain.UserID = userID
 	domain.Nameservers = []string{ns1, ns2}
-	domain. Status = "pending_verification" // Start as pending
-	domain. Proxied = false                 // Disabled until verified
+	domain.Status = "pending_verification" // Start as pending
+	domain.Proxied = false                 // Disabled until verified
 
 	// CreateDomain now returns the domain with ID and CreatedAt populated
 	createdDomain, err := database.CreateDomain(h.MongoClient, domain)
@@ -76,7 +76,7 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 
 // lookupNSWithCloudflareDoH performs NS lookup using Cloudflare's DNS-over-HTTPS
 func lookupNSWithCloudflareDoH(domain string) ([]string, error) {
-	ctx, cancel := context. WithTimeout(context. Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	url := fmt.Sprintf("https://cloudflare-dns.com/dns-query?name=%s&type=NS", domain)
@@ -94,7 +94,7 @@ func lookupNSWithCloudflareDoH(domain string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io. ReadAll(resp. Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -123,28 +123,28 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Get domain ID from query parameter
-	domainID := r.URL. Query().Get("id")
+	// 1.Get domain ID from query parameter
+	domainID := r.URL.Query().Get("id")
 	if domainID == "" {
 		http.Error(w, "Missing domain id", http.StatusBadRequest)
 		return
 	}
 
-	// 2. Fetch Domain from DB to get assigned NS
+	// 2.Fetch Domain from DB to get assigned NS
 	domain, err := database.GetDomainByID(h.MongoClient, domainID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
 	}
 
-	// 3. Security:  Ensure the user owns this domain
+	// 3.Security:  Ensure the user owns this domain
 	userID := r.Context().Value("user_id").(string)
-	if domain. UserID != userID {
+	if domain.UserID != userID {
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
-	// 4. Perform Live DNS Lookup using Cloudflare DoH
+	// 4.Perform Live DNS Lookup using Cloudflare DoH
 	nss, err := lookupNSWithCloudflareDoH(domain.Name)
 	if err != nil {
 		http.Error(w, "DNS Lookup failed:  "+err.Error(), http.StatusInternalServerError)
@@ -153,10 +153,10 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 
 	verified := false
 
-	// 5. Compare Found NS with Assigned NS
+	// 5.Compare Found NS with Assigned NS
 	for _, foundNS := range nss {
 		cleanFound := strings.TrimSuffix(foundNS, ".")
-		for _, assignedNS := range domain. Nameservers {
+		for _, assignedNS := range domain.Nameservers {
 			if strings.EqualFold(cleanFound, assignedNS) {
 				verified = true
 				break
@@ -167,7 +167,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 6. Update Status & Respond
+	// 6.Update Status & Respond
 	w.Header().Set("Content-Type", "application/json")
 
 	if verified {
@@ -190,7 +190,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":        "pending_verification",
-			"message":       "Verification failed.  We did not find the correct Nameservers.",
+			"message":       "Verification failed. We did not find the correct Nameservers.",
 			"found_records": nss,
 		})
 	}

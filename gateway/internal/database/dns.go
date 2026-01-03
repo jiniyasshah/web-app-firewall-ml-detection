@@ -12,9 +12,9 @@ var dnsDB *sql.DB
 
 // ConnectDNS establishes connection to PowerDNS MySQL database
 func ConnectDNS(user, pass, host, dbName string) error {
-	dsn := fmt. Sprintf("%s:%s@tcp(%s:3306)/%s?parseTime=true", user, pass, host, dbName)
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s?parseTime=true", user, pass, host, dbName)
 
-	db, err := sql. Open("mysql", dsn)
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return err
 	}
@@ -31,7 +31,7 @@ func ConnectDNS(user, pass, host, dbName string) error {
 // CloseDNS closes the MySQL connection
 func CloseDNS() {
 	if dnsDB != nil {
-		dnsDB. Close()
+		dnsDB.Close()
 	}
 }
 
@@ -39,18 +39,18 @@ func CloseDNS() {
 func AddDNSRecord(name, recordType, content string, proxied bool, wafIP string) error {
 	// Check if database is connected
 	if dnsDB == nil {
-		return fmt. Errorf("DNS database not connected")
+		return fmt.Errorf("DNS database not connected")
 	}
 
 	// First, get the domain_id for the zone
 	var domainID int
 
-	// Extract zone from record name (e.g., "www.  example.com" -> "example.com")
+	// Extract zone from record name (e.g., "www.example.com" -> "example.com")
 	zoneName := extractZone(name)
 
-	err := dnsDB. QueryRow("SELECT id FROM domains WHERE name = ?", zoneName).Scan(&domainID)
+	err := dnsDB.QueryRow("SELECT id FROM domains WHERE name = ?", zoneName).Scan(&domainID)
 	if err != nil {
-		return fmt. Errorf("zone not found: %s (error: %v)", zoneName, err)
+		return fmt.Errorf("zone not found: %s (error: %v)", zoneName, err)
 	}
 
 	// If proxied, point to WAF IP; otherwise, point to user's content
@@ -75,13 +75,13 @@ func GetDNSRecordsByDomain(domainName string) ([]map[string]interface{}, error) 
 	}
 
 	query := `
-		SELECT r.id, r. name, r.type, r.content, r.ttl
+		SELECT r.id, r.name, r.type, r.content, r.ttl
 		FROM records r
-		JOIN domains d ON r. domain_id = d.id
+		JOIN domains d ON r.domain_id = d.id
 		WHERE d.name = ?  OR r.name LIKE ?
 	`
 
-	rows, err := dnsDB. Query(query, domainName, "%. "+domainName)
+	rows, err := dnsDB.Query(query, domainName, "%."+domainName)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func GetDNSRecordsByDomain(domainName string) ([]map[string]interface{}, error) 
 		var name, recordType, content string
 		var ttl int
 
-		if err := rows. Scan(&id, &name, &recordType, &content, &ttl); err != nil {
+		if err := rows.Scan(&id, &name, &recordType, &content, &ttl); err != nil {
 			continue
 		}
 
@@ -173,24 +173,24 @@ func CreateDNSZone(domainName string, nameservers []string) error {
 
 	domainID, err := result.LastInsertId()
 	if err != nil {
-		return fmt. Errorf("failed to get zone ID: %v", err)
+		return fmt.Errorf("failed to get zone ID: %v", err)
 	}
 
 	// Add SOA record (required for every zone)
-	soaContent := fmt.Sprintf("%s. hostmaster.%s.  1 10800 3600 604800 3600",
+	soaContent := fmt.Sprintf("%s.hostmaster.%s.1 10800 3600 604800 3600",
 		nameservers[0], domainName)
 	
-	_, err = dnsDB. Exec(`
+	_, err = dnsDB.Exec(`
 		INSERT INTO records (domain_id, name, type, content, ttl, disabled)
 		VALUES (?, ?, 'SOA', ?, 3600, 0)
 	`, domainID, domainName, soaContent)
 	if err != nil {
-		return fmt. Errorf("failed to create SOA record: %v", err)
+		return fmt.Errorf("failed to create SOA record: %v", err)
 	}
 
 	// Add NS records
 	for _, ns := range nameservers {
-		_, err = dnsDB. Exec(`
+		_, err = dnsDB.Exec(`
 			INSERT INTO records (domain_id, name, type, content, ttl, disabled)
 			VALUES (?, ?, 'NS', ?, 3600, 0)
 		`, domainID, domainName, ns)
@@ -224,7 +224,7 @@ func DeleteDNSZone(domainName string) error {
 	// Delete the zone
 	_, err = dnsDB.Exec("DELETE FROM domains WHERE id = ?", domainID)
 	if err != nil {
-		return fmt. Errorf("failed to delete zone: %v", err)
+		return fmt.Errorf("failed to delete zone: %v", err)
 	}
 
 	return nil

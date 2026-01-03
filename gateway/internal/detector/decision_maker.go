@@ -13,7 +13,7 @@ const (
 // Source indicates who made the decision: "Rule Engine", "ML Engine", or "Hybrid"
 func Decide(ruleScore int, ruleBlock bool, mlAnomaly bool, mlConfidence float64) (Verdict, string, string) {
 	// ------------------------------------------
-	// 1. Critical Rules (The "Must Block" Layer)
+	// 1.Critical Rules (The "Must Block" Layer)
 	// ------------------------------------------
 	if ruleBlock {
 		return Block, "Critical Rule Match", "Rule Engine"

@@ -87,11 +87,11 @@ func GetUserByID(client *mongo.Client, id string) (*detector.User, error) {
 // ---------------------------------------------------------
 
 func CreateDomain(client *mongo.Client, domain detector.Domain) (detector.Domain, error) {
-	ctx, cancel := context. WithTimeout(context. Background(), TimeoutDuration)
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
 	if domain.ID == "" {
-		domain. ID = primitive.NewObjectID().Hex()
+		domain.ID = primitive.NewObjectID().Hex()
 	}
 	domain.CreatedAt = time.Now()
 
@@ -257,7 +257,7 @@ func UpsertRulePolicy(client *mongo.Client, policy detector.RulePolicy) error {
 // ---------------------------------------------------------
 
 func GetLogsForUser(client *mongo.Client, userID string, limit int64) ([]interface{}, error) {
-	// 1. Get all domain IDs for this user
+	// 1.Get all domain IDs for this user
 	domains, err := GetDomainsByUser(client, userID)
 	if err != nil {
 		return nil, err
@@ -267,7 +267,7 @@ func GetLogsForUser(client *mongo.Client, userID string, limit int64) ([]interfa
 		return []interface{}{}, nil
 	}
 
-	// 2. Filter logs by Host Header matching user's domains
+	// 2.Filter logs by Host Header matching user's domains
 	// Note: In a production V2, we should store 'domain_id' directly in the logs collection for efficiency.
 	domainNames := make([]string, len(domains))
 	for i, d := range domains {

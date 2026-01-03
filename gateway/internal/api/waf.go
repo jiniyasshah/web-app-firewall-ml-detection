@@ -37,7 +37,7 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	// Determine Rules for this Host
-	// Strip port if present (e.g. "example.com:8080" -> "example.com")
+	// Strip port if present (e.g."example.com:8080" -> "example.com")
 	host := r.Host
 	if strings.Contains(host, ":") {
 		if h, _, err := net.SplitHostPort(host); err == nil {
@@ -55,19 +55,19 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 	// Rate Limiting
 	limitReached := h.RateLimiter.IsRateLimited(clientIP)
 
-	// 1. Rule Engine Check
+	// 1.Rule Engine Check
 	ruleScore, triggeredTags, ruleBlock, rulePayload := detector.CheckRequest(r, currentRules, limitReached)
 
 	var isAnomaly bool
 	var confidence float64
 	var mlTag, mlTrigger string
 
-	// 2. ML Engine Check (Only if not already blocked and score is low)
+	// 2.ML Engine Check (Only if not already blocked and score is low)
 	if !ruleBlock && ruleScore < 15 {
 		isAnomaly, confidence, mlTag, mlTrigger = detector.CheckML(r, h.MLURL)
 	}
 
-	// 3. Final Decision
+	// 3.Final Decision
 	verdict, reason, source := detector.Decide(ruleScore, ruleBlock, isAnomaly, confidence)
 
 	// Merge ML tags if relevant
@@ -80,7 +80,7 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 		finalTrigger = mlTrigger
 	}
 
-	// 4. Logging & Action
+	// 4.Logging & Action
 	fullReq := logger.FullRequest{
 		Method:  r.Method,
 		URL:     r.URL.String(),

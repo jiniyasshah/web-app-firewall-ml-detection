@@ -84,7 +84,7 @@ func LogAttack(ip, path, reason, action, source string, tags []string, score int
 		TriggerPayload: trigger,
 	}
 
-	// 1. Save to DB (Async)
+	// 1.Save to DB (Async)
 	go func() {
 		_, err := logCollection.InsertOne(context.Background(), entry)
 		if err != nil {
@@ -92,7 +92,7 @@ func LogAttack(ip, path, reason, action, source string, tags []string, score int
 		}
 	}()
 
-	// 2. Broadcast to Live Dashboard (Non-blocking)
+	// 2.Broadcast to Live Dashboard (Non-blocking)
 	select {
 	case broadcast <- entry:
 	default:

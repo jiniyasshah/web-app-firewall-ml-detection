@@ -24,7 +24,7 @@ func (h *APIHandler) SystemStatus(w http.ResponseWriter, r *http.Request) {
 
 	statusMap := make(map[string]ComponentStatus)
 
-	// 1. GATEWAY STATS (Self)
+	// 1.GATEWAY STATS (Self)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	currentRPM := atomic.LoadUint64(&h.rpm)
@@ -36,7 +36,7 @@ func (h *APIHandler) SystemStatus(w http.ResponseWriter, r *http.Request) {
 		Network: fmt.Sprintf("%d Req/min", currentRPM),
 	}
 
-	// 2. DATABASE STATS
+	// 2.DATABASE STATS
 	// MongoDB manages its own resources, so we mark CPU/Mem as "Managed" 
 	// but we could query serverStatus if strict stats were needed.
 	if err := h.MongoClient.Ping(context.Background(), nil); err == nil {
@@ -55,7 +55,7 @@ func (h *APIHandler) SystemStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. ML SCORER STATS
+	// 3.ML SCORER STATS
 	statusMap["ml_scorer"] = fetchRemoteHealth(h.MLURL)
 
 	json.NewEncoder(w).Encode(statusMap)

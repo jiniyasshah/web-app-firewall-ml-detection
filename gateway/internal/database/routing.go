@@ -13,7 +13,7 @@ import (
 func AddRoutingRecord(client *mongo.Client, domainID, recordName, originIP string) error {
 	collection := client.Database(DBName).Collection("routing")
 
-	ctx, cancel := context. WithTimeout(context. Background(), TimeoutDuration)
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
 	// Upsert:  Update if exists, insert if not
@@ -48,12 +48,12 @@ func GetRoutingByHost(client *mongo.Client, host string) (string, error) {
 		return "", err
 	}
 
-	return result. OriginIP, nil
+	return result.OriginIP, nil
 }
 
 // DeleteRoutingRecord removes a routing entry
-func DeleteRoutingRecord(client *mongo. Client, recordName string) error {
-	collection := client. Database(DBName).Collection("routing")
+func DeleteRoutingRecord(client *mongo.Client, recordName string) error {
+	collection := client.Database(DBName).Collection("routing")
 
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
