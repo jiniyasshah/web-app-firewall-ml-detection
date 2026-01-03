@@ -15,29 +15,25 @@ import (
 	"web-app-firewall-ml-detection/internal/detector"
 )
 
-// The pool of nameservers you created in PowerDNS
 var realNameservers = []string{
 	"jiniyas", "rabin", "niraj", "sabin", "rita", 
 	"sneha", "exam", "bikalpa", "raju", "dhiren", "sanket",
 }
 
-type DoHResponse struct {
-	Answer []struct {
-		Name string `json:"name"`
-		Type int    `json:"type"`
-		Data string `json:"data"`
-	} `json:"Answer"`
-}
-
 const nsSuffix = ".ns.minishield.tech"
 
-// getRootDomain extracts the TLD+1 (e.g., "test.example.com" -> "example.com")
+// RDAP Response Structure (The Official Registrar Data)
+type RDAPResponse struct {
+	Nameservers []struct {
+		LdhName string `json:"ldhName"` // This holds "ns1.example.com"
+	} `json:"nameservers"`
+}
+
 func getRootDomain(domain string) string {
 	parts := strings.Split(domain, ".")
 	if len(parts) < 2 {
 		return domain
 	}
-	// Takes the last two parts (e.g. lemepush.tech)
 	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
 
@@ -55,26 +51,19 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ---------------------------------------------------------
 	// 1. STRICT SUBDOMAIN POLICY CHECK
-	// ---------------------------------------------------------
 	rootZone := getRootDomain(domain.Name)
-
-	// If the user is trying to add a subdomain (e.g. test.lemepush.tech)
-	// Check if the root (lemepush.tech) already exists in the system.
 	if rootZone != domain.Name {
 		existingRoot, err := database.GetDomainByName(h.MongoClient, rootZone)
-		// If no error, it means we found the root domain!
 		if err == nil && existingRoot != nil {
-			w.WriteHeader(http.StatusConflict) // 409 Conflict
+			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]string{
 				"error":   "Root domain exists",
-				"message": fmt.Sprintf("The root domain '%s' is already registered. Please add '%s' as an A Record under DNS Settings instead of creating a new Domain.", rootZone, domain.Name),
+				"message": fmt.Sprintf("The root domain '%s' is already registered. Please add '%s' as an A Record.", rootZone, domain.Name),
 			})
 			return
 		}
 	}
-	// ---------------------------------------------------------
 
 	// 2. Assign 2 Random Real Nameservers
 	rand.Seed(time.Now().UnixNano())
@@ -92,10 +81,9 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	domain.Status = "pending_verification"
 	domain.Proxied = false
 
-	// 3. Save to MongoDB (Internal Routing & UI)
+	// 3. Save to MongoDB
 	createdDomain, err := database.CreateDomain(h.MongoClient, domain)
 	if err != nil {
-		// Handle duplicate key error (if they try to add exact same domain again)
 		if strings.Contains(err.Error(), "duplicate key") {
 			http.Error(w, "Domain already exists", http.StatusConflict)
 			return
@@ -104,21 +92,14 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Provision PowerDNS (Zone + Fixed A Record)
-	// Since we passed the strict check, we treat this as a NEW ZONE.
-	
-	// A. Create the Zone
+	// 4. Provision PowerDNS
 	err = database.CreateDNSZone(domain.Name, domain.Nameservers)
 	if err != nil {
-		log.Printf("ERROR: Failed to create DNS Zone for %s: %v", domain.Name, err)
+		log.Printf("ERROR: Failed to create DNS Zone: %v", err)
 	} else {
-		// B. Create the Fixed A Record (Public DNS -> WAF IP)
-		// We use h.WafPublicIP which is loaded from ENV
 		err = database.AddDNSRecord(domain.Name, "A", h.WafPublicIP, false, "")
 		if err != nil {
-			log.Printf("ERROR: Failed to create default A record for %s: %v", domain.Name, err)
-		} else {
-			log.Printf("SUCCESS: Provisioned DNS for %s -> %s", domain.Name, h.WafPublicIP)
+			log.Printf("ERROR: Failed to create A record: %v", err)
 		}
 	}
 
@@ -126,18 +107,20 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(createdDomain)
 }
 
-// lookupNSWithCloudflareDoH performs NS lookup using Cloudflare's DNS-over-HTTPS
-func lookupNSWithCloudflareDoH(domain string) ([]string, error) {
+// checkRegistrarRDAP queries the Official Registry (RDAP) to find the configured Nameservers.
+// This is immune to "Child Lying" because we talk to the Registry, not the DNS server.
+func checkRegistrarRDAP(domain string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("https://cloudflare-dns.com/dns-query?name=%s&type=NS", domain)
+	// rdap.org is a redirector that finds the correct registry (like Verisign, Radix, etc.)
+	url := fmt.Sprintf("https://rdap.org/domain/%s", domain)
 	
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/dns-json")
+	req.Header.Set("Accept", "application/rdap+json")
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
@@ -146,79 +129,88 @@ func lookupNSWithCloudflareDoH(domain string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("domain not registered found")
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	var dohResp DoHResponse
-	if err := json.Unmarshal(body, &dohResp); err != nil {
+	var rdapResp RDAPResponse
+	if err := json.Unmarshal(body, &rdapResp); err != nil {
 		return nil, err
 	}
 
 	var nameservers []string
-	for _, answer := range dohResp.Answer {
-		if answer.Type == 2 { // NS record type
-			ns := strings.TrimSuffix(answer.Data, ".")
-			nameservers = append(nameservers, ns)
-		}
+	for _, ns := range rdapResp.Nameservers {
+		// RDAP returns clean names "ns1.example.com", usually without trailing dot.
+		// We trim just in case.
+		cleanName := strings.TrimSuffix(ns.LdhName, ".")
+		nameservers = append(nameservers, cleanName)
 	}
 
 	return nameservers, nil
 }
 
-// VerifyDomain checks if the user actually updated their NS records
 func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 1. Get domain ID from query parameter
 	domainID := r.URL.Query().Get("id")
 	if domainID == "" {
 		http.Error(w, "Missing domain id", http.StatusBadRequest)
 		return
 	}
 
-	// 2. Fetch Domain from DB to get assigned NS
 	domain, err := database.GetDomainByID(h.MongoClient, domainID)
 	if err != nil {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
 	}
 
-	// 3. Security: Ensure the user owns this domain
 	userID := r.Context().Value("user_id").(string)
 	if domain.UserID != userID {
 		http.Error(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
-	// 4. Perform Live DNS Lookup using Cloudflare DoH
-	nss, err := lookupNSWithCloudflareDoH(domain.Name)
+	// 4. SECURITY CHECK: Use RDAP to check the Registrar directly.
+	foundNS, err := checkRegistrarRDAP(domain.Name)
 	if err != nil {
-		http.Error(w, "DNS Lookup failed: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("RDAP Lookup failed: %v", err)
+		// We return the error so the user knows something went wrong
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "Verification Unavailable", 
+			"details": err.Error(),
+		})
 		return
 	}
 
-	verified := false
-
-	// 5. Compare Found NS with Assigned NS
-	for _, foundNS := range nss {
-		cleanFound := strings.TrimSuffix(foundNS, ".")
-		for _, assignedNS := range domain.Nameservers {
-			if strings.EqualFold(cleanFound, assignedNS) {
-				verified = true
+	// 5. STRICT VERIFICATION: Ensure ALL assigned NS are present at Registrar
+	matchedCount := 0
+	
+	for _, assignedNS := range domain.Nameservers {
+		found := false
+		for _, liveNS := range foundNS {
+			// Case-insensitive comparison
+			if strings.EqualFold(liveNS, assignedNS) {
+				found = true
 				break
 			}
 		}
-		if verified {
-			break
+		if found {
+			matchedCount++
 		}
 	}
 
-	// 6. Update Status & Respond
+	// Pass if we found ALL assigned nameservers in the RDAP response
+	verified := (matchedCount == len(domain.Nameservers)) && (len(domain.Nameservers) > 0)
+
 	w.Header().Set("Content-Type", "application/json")
 
 	if verified {
@@ -235,9 +227,10 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":        "pending_verification",
-			"message":       "Verification failed. We did not find the correct Nameservers.",
-			"found_records": nss,
+			"status":             "pending_verification",
+			"message":            "Verification failed. Your Registrar nameservers do not match the assigned ones.",
+			"assigned_ns":        domain.Nameservers,
+			"found_at_registrar": foundNS, // This will now show the REAL list (e.g., ["niraj", "dhiren"])
 		})
 	}
 }
