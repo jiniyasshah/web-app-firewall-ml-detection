@@ -30,7 +30,6 @@ func getEnv(key, fallback string) string {
 // CORSMiddleware handles Preflight and Headers
 func CORSMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Adjust this if you want to lock down CORS to specific domains
 		w.Header().Set("Access-Control-Allow-Origin", getEnv("FRONTEND_URL", "http://localhost:3001"))
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -48,18 +47,13 @@ func CORSMiddleware(next http.Handler) http.Handler {
 func main() {
 	// 1. CONFIGURATION
 	mongoURI := getEnv("MONGO_URI", "mongodb://mongo:27017")
-	
-	// Default fallback (e.g. Python server) if domain is not found in DB
 	defaultOrigin := getEnv("ORIGIN_URL", "http://origin:3000")
 	mlURL := getEnv("ML_URL", "http://ml_scorer:8000/predict")
-	
-	// [NEW] Public IP of the Droplet for DNS Records
 	wafPublicIP := getEnv("WAF_PUBLIC_IP", "64.227.156.70")
-
-	// DNS Database Config
+	
 	dnsUser := getEnv("DNS_DB_USER", "pdns")
 	dnsPass := getEnv("DNS_DB_PASS", "pdns_password")
-	dnsHost := getEnv("DNS_DB_HOST", "dns_sql_db") // Service name from docker-compose
+	dnsHost := getEnv("DNS_DB_HOST", "dns_sql_db")
 	dnsDB := getEnv("DNS_DB_NAME", "powerdns")
 
 	// 2. CONNECT DB (MongoDB)
@@ -74,109 +68,90 @@ func main() {
 	log.Println("Connecting to DNS SQL Database...")
 	err = database.ConnectDNS(dnsUser, dnsPass, dnsHost, dnsDB)
 	if err != nil {
-		log.Printf("Warning: DNS DB Connection failed (DNS features may not work): %v", err)
+		log.Printf("Warning: DNS DB Connection failed: %v", err)
 	}
 
 	// 4. INIT COMPONENTS
 	logger.Init(client, "waf")
 	rateLimiter := limiter.New(100, 1*time.Minute)
 
-	// 5. DYNAMIC REVERSE PROXY LOGIC
+	// 5. REVERSE PROXY LOGIC
 	director := func(req *http.Request) {
 		incomingHost := req.Host
 		var targetURL *url.URL
 
-		// A. Look up the origin IP from the routing collection (MongoDB)
+		// A. Look up origin IP from MongoDB
 		originIP, err := database.GetRoutingByHost(client, incomingHost)
 
 		if err == nil && originIP != "" {
-			// Found in routing table: Route to the user's origin server
 			rawTarget := originIP
-			// Add scheme if missing
 			if len(rawTarget) < 4 || rawTarget[:4] != "http" {
 				rawTarget = "http://" + rawTarget
 			}
 			targetURL, _ = url.Parse(rawTarget)
 			log.Printf("[Proxy] Routing %s -> %s", incomingHost, rawTarget)
 		} else {
-			// Not found: Fallback to the default origin
 			targetURL, _ = url.Parse(defaultOrigin)
 			log.Printf("[Proxy] No routing found for %s, using default: %s", incomingHost, defaultOrigin)
 		}
 
-		// B. Rewrite Request
 		req.URL.Scheme = targetURL.Scheme
 		req.URL.Host = targetURL.Host
-
-		// C. Pass original host header
 		req.Header.Set("X-Forwarded-Host", incomingHost)
-		req.Header.Set("X-Forwarded-Proto", "https") // We are now HTTPS!
+		req.Header.Set("X-Forwarded-Proto", "https") // Signal that we are secure
 		req.Header.Set("X-Real-IP", req.RemoteAddr)
 	}
 
 	proxy := &httputil.ReverseProxy{Director: director}
 
-	// 6. INIT API HANDLER (Pass wafPublicIP)
+	// 6. INIT API HANDLER
 	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, defaultOrigin, wafPublicIP)
 
 	// 7. DEFINE ROUTES
 	mux := http.NewServeMux()
-
-	// --- Public API ---
 	mux.HandleFunc("/api/status", apiHandler.SystemStatus)
 	mux.HandleFunc("/api/auth/register", apiHandler.Register)
 	mux.HandleFunc("/api/auth/login", apiHandler.Login)
 	mux.HandleFunc("/api/auth/logout", apiHandler.Logout)
 	mux.HandleFunc("/api/auth/check", api.AuthMiddleware(apiHandler.CheckAuth))
 	mux.HandleFunc("/api/stream", apiHandler.SSEHandler)
-
-	// --- Protected API ---
 	mux.HandleFunc("/api/domains", api.AuthMiddleware(apiHandler.ListDomains))
 	mux.HandleFunc("/api/domains/add", api.AuthMiddleware(apiHandler.AddDomain))
 	mux.HandleFunc("/api/domains/verify", api.AuthMiddleware(apiHandler.VerifyDomain))
 	mux.HandleFunc("/api/dns/records", api.AuthMiddleware(apiHandler.ManageRecords))
-
 	mux.HandleFunc("/api/rules/global", api.AuthMiddleware(apiHandler.GetGlobalRules))
 	mux.HandleFunc("/api/rules/custom", api.AuthMiddleware(apiHandler.GetCustomRules))
 	mux.HandleFunc("/api/rules/custom/add", api.AuthMiddleware(apiHandler.AddCustomRule))
 	mux.HandleFunc("/api/rules/custom/delete", api.AuthMiddleware(apiHandler.DeleteCustomRule))
 	mux.HandleFunc("/api/rules/toggle", api.AuthMiddleware(apiHandler.ToggleRule))
-
 	mux.HandleFunc("/api/logs/secure", api.AuthMiddleware(apiHandler.SecuredLogsHandler))
-
-	// --- Traffic Handler ---
 	mux.HandleFunc("/", apiHandler.WAFHandler)
 
 	// ---------------------------------------------------------
-	// 8. HTTPS AUTO-CERT CONFIGURATION (The Magic Part)
+	// 8. HTTPS AUTO-CERT CONFIGURATION
 	// ---------------------------------------------------------
 
-	// The HostPolicy checks MongoDB to ensure we only generate certs 
-	// for domains that actually belong to our users.
 	hostPolicy := func(ctx context.Context, host string) error {
-		// 1. Allow our own API/Dashboard domain (Adjust these to match your frontend!)
-		if host == "api.minishield.tech" || host == "dashboard.minishield.tech" {
+		// 1. Allow Admin/Dashboard domains explicitly
+		if host == "api.minishield.tech" || host == "dashboard.minishield.tech" || host == "minishield.tech" {
 			return nil
 		}
 
-		// 2. Check if the domain exists in our MongoDB
-		// We use GetRoutingByHost because it efficiently checks if a domain is registered
+		// 2. Allow User Domains (Check MongoDB)
 		_, err := database.GetRoutingByHost(client, host)
 		if err != nil {
-			// Domain not found in our DB -> Reject Certificate Generation
 			return fmt.Errorf("host %s not allowed", host)
 		}
-
 		return nil
 	}
 
 	certManager := autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		HostPolicy: hostPolicy,
-		Cache:      autocert.DirCache("certs"), // Save certs to disk
+		Cache:      autocert.DirCache("certs"),
 	}
 
-	// Create a custom server for HTTPS
+	// HTTPS Server
 	httpsServer := &http.Server{
 		Addr:    ":443",
 		Handler: CORSMiddleware(mux),
@@ -189,8 +164,7 @@ func main() {
 	// 9. START SERVERS
 	// ---------------------------------------------------------
 
-	// A. HTTP Server (Port 80)
-	// This handles the ACME Challenge for Let's Encrypt AND redirects users to HTTPS
+	// HTTP Server (Port 80) -> Redirects to HTTPS & Solves Challenges
 	go func() {
 		log.Println("✅ Starting HTTP Server on :80 (ACME Challenge + Redirect)")
 		if err := http.ListenAndServe(":80", certManager.HTTPHandler(nil)); err != nil {
@@ -198,8 +172,8 @@ func main() {
 		}
 	}()
 
-	// B. HTTPS Server (Port 443)
-	log.Println("🔒 Starting HTTPS WAF on :443 (Auto-Cert Enabled)")
+	// HTTPS Server (Port 443)
+	log.Println("🔒 Starting HTTPS WAF on :443")
 	if err := httpsServer.ListenAndServeTLS("", ""); err != nil {
 		log.Fatalf("HTTPS Server Failed: %v", err)
 	}
