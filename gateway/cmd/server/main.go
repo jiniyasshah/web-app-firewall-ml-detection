@@ -75,6 +75,17 @@ func main() {
 	logger.Init(client, "waf")
 	rateLimiter := limiter.New(100, 1*time.Minute)
 
+	page404, err := os.ReadFile("pages/404.html")
+    if err != nil {
+        log.Fatalf("❌ Critical: Could not load pages/404.html: %v", err)
+    }
+
+	page502, err := os.ReadFile("pages/502.html")
+    if err != nil {
+        log.Fatalf("❌ Critical: Could not load pages/502.html: %v", err)
+    }
+
+
 	// 5. REVERSE PROXY LOGIC
 	director := func(req *http.Request) {
 		incomingHost := req.Host
@@ -102,15 +113,25 @@ func main() {
 		req.Header.Set("X-Real-IP", req.RemoteAddr)
 	}
 
-	proxy := &httputil.ReverseProxy{Director: director}
-
-	pageBytes, err := os.ReadFile("pages/404.html")
-    if err != nil {
-        log.Fatalf("❌ Critical: Could not load pages/404.html: %v", err)
+// --- DEFINE THE PROXY WITH ERROR HANDLER ---
+    proxy := &httputil.ReverseProxy{
+        Director: director,
+        ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+            log.Printf("🔥 Proxy Error for %s: %v", r.Host, err)
+            
+            // Fix: Check r.Context().Err() to see if the client disconnected
+            if r.Context().Err() != nil {
+                return 
+            }
+            
+            w.WriteHeader(http.StatusBadGateway)
+            w.Header().Set("Content-Type", "text/html")
+            w.Write(page502)
+        },
     }
-
+	
 	// 6. INIT API HANDLER
-	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, defaultOrigin, wafPublicIP, pageBytes)
+	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, defaultOrigin, wafPublicIP, page404)
 
 	// 7. DEFINE ROUTES
 	mux := http.NewServeMux()
