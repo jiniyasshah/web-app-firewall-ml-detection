@@ -165,7 +165,7 @@ def predict(data: RequestData):
     trigger_content = "" 
 
     # --- 5. Hybrid Analysis Loop ---
-    for _, content in inspectable_items.items():
+    for source, content in inspectable_items.items():
         if not content.strip(): 
             continue
             
