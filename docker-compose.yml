@@ -10,8 +10,6 @@ services:
       - "80:80" # Changed from 8080. Required for Let's Encrypt validation.
       - "443:443" # New. Required for HTTPS.
     depends_on:
-      origin:
-        condition: service_started
       dns_db:
         condition: service_healthy
     environment:
