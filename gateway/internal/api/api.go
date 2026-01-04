@@ -24,6 +24,7 @@ type APIHandler struct {
 	MLURL        string
 	OriginURL    string
 	WafPublicIP  string // [NEW] The Droplet IP to use for A records
+	UnconfiguredPage []byte
 
 	// RULES CACHE
 	rulesMutex sync.RWMutex
@@ -38,16 +39,17 @@ type APIHandler struct {
 }
 
 // NewAPIHandler initializes the handler and loads initial rules
-func NewAPIHandler(client *mongo.Client, proxy *httputil.ReverseProxy, limiter *limiter.RateLimiter, mlURL, originURL, wafPublicIP string) *APIHandler {
-	h := &APIHandler{
-		MongoClient:  client,
-		Proxy:        proxy,
-		RateLimiter:  limiter,
-		MLURL:        mlURL,
-		OriginURL:    originURL,
-		WafPublicIP:  wafPublicIP,
-		domainRules:  make(map[string][]detector.WAFRule),
-	}
+func NewAPIHandler(client *mongo.Client, proxy *httputil.ReverseProxy, limiter *limiter.RateLimiter, mlURL, originURL, wafPublicIP string, unconfiguredPage []byte) *APIHandler {
+    h := &APIHandler{
+        MongoClient:      client,
+        Proxy:            proxy,
+        RateLimiter:      limiter,
+        MLURL:            mlURL,
+        OriginURL:        originURL,
+        WafPublicIP:      wafPublicIP,
+        UnconfiguredPage: unconfiguredPage, // <--- ASSIGN IT
+        domainRules:      make(map[string][]detector.WAFRule),
+    }
 	
 	// Load rules immediately on startup
 	h.ReloadRules()

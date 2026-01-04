@@ -47,24 +47,40 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 
 	h.rulesMutex.RLock()
 	currentRules, exists := h.domainRules[host]
-	if !exists {
-		currentRules = h.globalFallback
-	}
 	h.rulesMutex.RUnlock()
+
+	// ---------------------------------------------------------
+	// 1. UNCONFIGURED DOMAIN CHECK (Prevents Domain Fronting)
+	// ---------------------------------------------------------
+	if !exists {
+		// Log the attempt
+		log.Printf("⚠️ Unknown Domain Accessed: %s from %s. Returning Custom 404.", host, clientIP)
+		
+		// Return the pre-loaded custom HTML page
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		if len(h.UnconfiguredPage) > 0 {
+			w.Write(h.UnconfiguredPage)
+		} else {
+			// Fallback if file load failed
+			w.Write([]byte("Domain not configured"))
+		}
+		return
+	}
 
 	// Rate Limiting
 	limitReached := h.RateLimiter.IsRateLimited(clientIP)
 
-	
-ruleScore, triggeredTags, ruleBlock, rulePayload := detector.CheckRequest(r, currentRules, limitReached)
+	// 1.Rule Engine Check
+	ruleScore, triggeredTags, ruleBlock, rulePayload := detector.CheckRequest(r, currentRules, limitReached)
 
 	var isAnomaly bool
 	var confidence float64
 	var mlTag, mlTrigger string
 
-	// 2.ML Engine Check
+	// 2.ML Engine Check (Only if not already blocked and score is low)
 	if !ruleBlock && ruleScore < 15 {
-		// CHANGE THIS LINE: Pass 'bodyBytes' as the 2nd argument
+		// FIX APPLIED: Passing bodyBytes correctly
 		isAnomaly, confidence, mlTag, mlTrigger = detector.CheckML(r, bodyBytes, h.MLURL)
 	}
 

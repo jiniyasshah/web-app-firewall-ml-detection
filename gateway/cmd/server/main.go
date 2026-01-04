@@ -104,8 +104,13 @@ func main() {
 
 	proxy := &httputil.ReverseProxy{Director: director}
 
+	pageBytes, err := os.ReadFile("pages/404.html")
+    if err != nil {
+        log.Fatalf("❌ Critical: Could not load pages/404.html: %v", err)
+    }
+
 	// 6. INIT API HANDLER
-	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, defaultOrigin, wafPublicIP)
+	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, defaultOrigin, wafPublicIP, pageBytes)
 
 	// 7. DEFINE ROUTES
 	mux := http.NewServeMux()
