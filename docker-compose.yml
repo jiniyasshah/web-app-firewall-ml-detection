@@ -85,7 +85,6 @@ services:
   # ----------------------------------------------------------------
 
 volumes:
-  mongo_data:
   dns_data:
 
 networks:
