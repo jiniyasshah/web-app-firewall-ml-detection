@@ -34,7 +34,8 @@ def master_preprocess(text):
     return decoded
 
 # --- 2. Deep Payload Parser ---
-def dissect_payload(path, body):
+# UPDATED: Now accepts headers
+def dissect_payload(path, body, headers):
     components = {}
     
     # A. Path Analysis
@@ -85,6 +86,14 @@ def dissect_payload(path, body):
         except:
             pass
 
+    # C. Header Analysis (NEW)
+    if headers:
+        for k, v in headers.items():
+            # Skip safe/noisy headers to reduce false positives and CPU usage
+            if k.lower() in ["host", "accept", "connection", "accept-encoding", "content-length"]:
+                continue
+            components[f"Header: {k}"] = master_preprocess(v)
+
     return components
 
 # --- 3. Startup ---
@@ -95,18 +104,20 @@ def load_model():
         model = joblib.load(MODEL_PATH)
         print(f"✅ ML Model Loaded: {MODEL_PATH}")
     else:
-        print(f"❌ Critical: Model not found at {MODEL_PATH}. Check start.sh logs.")
+        print(f"❌ Critical: Model not found at {MODEL_PATH}. Check logs.")
 
 class RequestData(BaseModel):
     path: str
     body: str
     length: int
+    headers: dict = {}
 
 # --- 4. Heuristic Scorer ---
 def calculate_heuristic_score(content):
     suspicious_chars = {
         "'": 0.15, '"': 0.10, "<": 0.15, ">": 0.15, ";": 0.10, "--": 0.20,
-        "(": 0.05, ")": 0.05, "$": 0.10, "`": 0.10, "union": 0.30, "select": 0.20
+        "(": 0.05, ")": 0.05, "$": 0.10, "`": 0.10, "union": 0.30, "select": 0.20,
+        "{": 0.10, "}": 0.10 # Added curlies for Log4j detection support
     }
     score = 0.0
     content_lower = content.lower()
@@ -148,16 +159,19 @@ def predict(data: RequestData):
     # ---------------------------------------------------------
     print("\n" + "="*40)
     print(f"📥 RECEIVED REQUEST #{request_count}")
-    print(f"🔹 Path:   {data.path!r}")
-    print(f"🔹 Body:   {data.body!r}")
-    print(f"🔹 Length: {data.length}")
+    print(f"🔹 Path:    {data.path!r}")
+    print(f"🔹 Body:    {data.body!r}")
+    print(f"🔹 Length:  {data.length}")
+    # Log the headers so you can verify they are arriving
+    print(f"🔹 Headers: {data.headers}") 
     print("="*40 + "\n", flush=True)
     # ---------------------------------------------------------
 
     if not model:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    inspectable_items = dissect_payload(data.path, data.body)
+    # Pass headers to the dissector
+    inspectable_items = dissect_payload(data.path, data.body, data.headers)
     
     max_risk_score = 0.0
     is_anomaly = False
