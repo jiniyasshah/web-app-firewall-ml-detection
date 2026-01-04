@@ -89,9 +89,17 @@ def dissect_payload(path, body, headers):
     # C. Header Analysis (NEW)
     if headers:
         for k, v in headers.items():
+            key_lower = k.lower()
             # Skip safe/noisy headers to reduce false positives and CPU usage
-            if k.lower() in ["host", "accept", "connection", "accept-encoding", "content-length"]:
+            if key_lower in ["host", "accept", "connection", "accept-encoding", "content-length"]:
                 continue
+            if key_lower.startswith("sec-ch-ua") or key_lower.startswith("sec-fetch"):
+                continue
+
+            # 3. Skip Priority/Cache headers
+            if key_lower in ["priority", "cache-control", "pragma"]:
+                continue
+            
             components[f"Header: {k}"] = master_preprocess(v)
 
     return components
