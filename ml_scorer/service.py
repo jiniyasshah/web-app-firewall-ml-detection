@@ -143,6 +143,17 @@ def predict(data: RequestData):
     global request_count
     request_count += 1
     
+    # ---------------------------------------------------------
+    # 🔍 DEBUGGING LOGS: See exactly what arrives
+    # ---------------------------------------------------------
+    print("\n" + "="*40)
+    print(f"📥 RECEIVED REQUEST #{request_count}")
+    print(f"🔹 Path:   {data.path!r}")
+    print(f"🔹 Body:   {data.body!r}")
+    print(f"🔹 Length: {data.length}")
+    print("="*40 + "\n", flush=True)
+    # ---------------------------------------------------------
+
     if not model:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
