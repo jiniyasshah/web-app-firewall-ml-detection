@@ -16,7 +16,6 @@ services:
         condition: service_healthy
     environment:
       - MONGO_URI=${MONGO_URI}
-      - ORIGIN_URL=http://origin:3000
       - ML_URL=http://ml_scorer:8000/predict
       - DNS_DB_HOST=dns_db
       - DNS_DB_USER=pdns
@@ -25,20 +24,6 @@ services:
       - WAF_PUBLIC_IP=64.227.156.70 # Add your Droplet IP here
     volumes:
       - ./certs:/app/certs # Persist SSL certificates so they survive restarts!
-    networks:
-      - waf_net
-
-  origin:
-    build: ./test_server
-    container_name: test_server
-    ports:
-      - "3000:3000"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
     networks:
       - waf_net
 
