@@ -19,6 +19,7 @@ services:
       - DNS_DB_USER=pdns
       - DNS_DB_PASS=pdns_password
       - DNS_DB_NAME=powerdns
+      - FRONTEND_URL=${FRONTEND_URL}
       - WAF_PUBLIC_IP=64.227.156.70 # Add your Droplet IP here
     volumes:
       - ./certs:/app/certs # Persist SSL certificates so they survive restarts!
