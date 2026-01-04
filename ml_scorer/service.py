@@ -34,7 +34,6 @@ def master_preprocess(text):
     return decoded
 
 # --- 2. Deep Payload Parser ---
-# UPDATED: Now accepts headers
 def dissect_payload(path, body, headers):
     components = {}
     
@@ -86,20 +85,23 @@ def dissect_payload(path, body, headers):
         except:
             pass
 
-    # C. Header Analysis (NEW)
+    # C. Header Analysis
     if headers:
         for k, v in headers.items():
             key_lower = k.lower()
-            # Skip safe/noisy headers to reduce false positives and CPU usage
-            if key_lower in ["host", "accept", "connection", "accept-encoding", "content-length"]:
+            
+            # 1. Skip standard noisy headers
+            if key_lower in ["host", "accept", "connection", "accept-encoding", "content-length", "upgrade-insecure-requests"]:
                 continue
+            
+            # 2. Skip Browser Fingerprinting Headers (Save CPU & reduce noise)
             if key_lower.startswith("sec-ch-ua") or key_lower.startswith("sec-fetch"):
                 continue
 
-            # 3. Skip Priority/Cache headers
+            # 3. Skip Cache/Priority
             if key_lower in ["priority", "cache-control", "pragma"]:
                 continue
-            
+
             components[f"Header: {k}"] = master_preprocess(v)
 
     return components
@@ -120,12 +122,13 @@ class RequestData(BaseModel):
     length: int
     headers: dict = {}
 
-# --- 4. Heuristic Scorer ---
+# --- 4. Heuristic Scorer (Generic) ---
 def calculate_heuristic_score(content):
+    # This penalizes (;), ((), etc. Good for Body/SQL, BAD for User-Agents.
     suspicious_chars = {
         "'": 0.15, '"': 0.10, "<": 0.15, ">": 0.15, ";": 0.10, "--": 0.20,
         "(": 0.05, ")": 0.05, "$": 0.10, "`": 0.10, "union": 0.30, "select": 0.20,
-        "{": 0.10, "}": 0.10 # Added curlies for Log4j detection support
+        "{": 0.10, "}": 0.10
     }
     score = 0.0
     content_lower = content.lower()
@@ -138,15 +141,9 @@ def calculate_heuristic_score(content):
 @app.get("/health")
 def health_check():
     process = psutil.Process(os.getpid())
-    
-    # Get memory usage in MB
     memory_info = process.memory_info()
     memory_mb = round(memory_info.rss / 1024 / 1024, 2)
-    
-    # Get CPU usage (percent)
     cpu_percent = process.cpu_percent(interval=None)
-    
-    # Calculate simple RPM (Avg since start)
     uptime_min = (time.time() - start_time) / 60
     rpm = int(request_count / uptime_min) if uptime_min > 0 else 0
     
@@ -162,23 +159,16 @@ def predict(data: RequestData):
     global request_count
     request_count += 1
     
-    # ---------------------------------------------------------
-    # 🔍 DEBUGGING LOGS: See exactly what arrives
-    # ---------------------------------------------------------
+    # Debug Logs
     print("\n" + "="*40)
     print(f"📥 RECEIVED REQUEST #{request_count}")
     print(f"🔹 Path:    {data.path!r}")
-    print(f"🔹 Body:    {data.body!r}")
-    print(f"🔹 Length:  {data.length}")
-    # Log the headers so you can verify they are arriving
-    print(f"🔹 Headers: {data.headers}") 
+    # print(f"🔹 Headers: {data.headers}") # Uncomment if you need deep debugging
     print("="*40 + "\n", flush=True)
-    # ---------------------------------------------------------
 
     if not model:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    # Pass headers to the dissector
     inspectable_items = dissect_payload(data.path, data.body, data.headers)
     
     max_risk_score = 0.0
@@ -188,15 +178,15 @@ def predict(data: RequestData):
 
     # --- 5. Hybrid Analysis Loop ---
     for source, content in inspectable_items.items():
-        if not content.strip(): 
-            continue
-            
+        if not content.strip(): continue
+        
+        # Skip short, safe tokens
         is_short = len(content) < 4
-        is_alphanum = content.replace('.', '').isalnum()
+        is_alphanum = content.replace('.', '').replace('-', '').isalnum()
         if is_short and is_alphanum:
             continue
 
-        # A. Get ML Confidence
+        # A. ML Analysis (Always Run)
         pred_label = model.predict([content])[0]
         probs = model.predict_proba([content])[0]
         ml_confidence = probs[list(model.classes_).index(pred_label)]
@@ -206,8 +196,21 @@ def predict(data: RequestData):
         else:
             ml_risk = ml_confidence
 
-        # B. Get Heuristic Boost
-        heuristic_boost = calculate_heuristic_score(content)
+        # B. Conditional Heuristic Scoring
+        heuristic_boost = 0.0
+        
+        if "user-agent" in source.lower():
+            # 🟢 BYPASS: Do NOT run heuristic scorer on User-Agents.
+            # Normal browsers have ";" and "(". 
+            # Bad bots are already blocked by Go Rules.
+            # We trust the ML model alone for subtle UA anomalies.
+            heuristic_boost = 0.0 
+        else:
+            # 🔴 ENFORCE: Run heuristic scorer on Body/Path.
+            # Semicolons here are still suspicious (SQLi).
+            heuristic_boost = calculate_heuristic_score(content)
+
+        # C. Final Calculation
         final_risk = ml_risk + heuristic_boost
         if final_risk > 1.0: final_risk = 1.0
 
