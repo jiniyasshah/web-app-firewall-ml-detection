@@ -3,7 +3,6 @@ package detector
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 )
@@ -21,14 +20,18 @@ type MLResponse struct {
 	TriggerContent string  `json:"trigger_content"`
 }
 
-// CheckML sends the request to the Python ML service
-func CheckML(r *http.Request, mlURL string) (bool, float64, string, string) {
-	// Re-read body (it was restored in WAFHandler)
-	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+// Update signature to accept bodyBytes directly
+func CheckML(r *http.Request, bodyBytes []byte, mlURL string) (bool, float64, string, string) {
+	
+	// FIX 1: Send the Full URI (Path + Query) so ML sees "?id=<script>"
+	fullPath := r.URL.Path
+	if r.URL.RawQuery != "" {
+		fullPath += "?" + r.URL.RawQuery
+	}
 
+	// FIX 2: Use the bytes passed in. Do not touch r.Body again.
 	payload := MLRequest{
-		Path:   r.URL.Path,
+		Path:   fullPath,
 		Body:   string(bodyBytes),
 		Length: len(bodyBytes),
 	}
@@ -41,7 +44,6 @@ func CheckML(r *http.Request, mlURL string) (bool, float64, string, string) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Post(mlURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		// Log error in production
 		return false, 0.0, "", ""
 	}
 	defer resp.Body.Close()

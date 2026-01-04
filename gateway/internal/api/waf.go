@@ -55,16 +55,17 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 	// Rate Limiting
 	limitReached := h.RateLimiter.IsRateLimited(clientIP)
 
-	// 1.Rule Engine Check
-	ruleScore, triggeredTags, ruleBlock, rulePayload := detector.CheckRequest(r, currentRules, limitReached)
+	
+ruleScore, triggeredTags, ruleBlock, rulePayload := detector.CheckRequest(r, currentRules, limitReached)
 
 	var isAnomaly bool
 	var confidence float64
 	var mlTag, mlTrigger string
 
-	// 2.ML Engine Check (Only if not already blocked and score is low)
+	// 2.ML Engine Check
 	if !ruleBlock && ruleScore < 15 {
-		isAnomaly, confidence, mlTag, mlTrigger = detector.CheckML(r, h.MLURL)
+		// CHANGE THIS LINE: Pass 'bodyBytes' as the 2nd argument
+		isAnomaly, confidence, mlTag, mlTrigger = detector.CheckML(r, bodyBytes, h.MLURL)
 	}
 
 	// 3.Final Decision
