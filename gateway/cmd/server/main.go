@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"web-app-firewall-ml-detection/internal/api"
@@ -28,20 +29,36 @@ func getEnv(key, fallback string) string {
 }
 
 // CORSMiddleware handles Preflight and Headers
+// CORSMiddleware handles Preflight and Headers for multiple origins
 func CORSMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", getEnv("FRONTEND_URL", "https://www.minishield.tech"))
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // 1. Get the allowed origins from Env and split them into a slice
+        envOrigins := getEnv("FRONTEND_URL", "https://www.minishield.tech")
+        allowedOrigins := strings.Split(envOrigins, ",")
 
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+        // 2. Get the origin of the incoming request
+        requestOrigin := r.Header.Get("Origin")
 
-		next.ServeHTTP(w, r)
-	})
+        // 3. Check if the request origin is in our allowed list
+        for _, origin := range allowedOrigins {
+            // TrimSpace is important in case env var looks like "url1, url2"
+            if strings.TrimSpace(origin) == requestOrigin {
+                w.Header().Set("Access-Control-Allow-Origin", requestOrigin)
+                break
+            }
+        }
+
+        w.Header().Set("Access-Control-Allow-Credentials", "true")
+        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+
+        if r.Method == "OPTIONS" {
+            w.WriteHeader(http.StatusOK)
+            return
+        }
+
+        next.ServeHTTP(w, r)
+    })
 }
 
 func main() {
