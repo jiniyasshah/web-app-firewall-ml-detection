@@ -48,7 +48,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MODEL_PATH=/app/model.pkl
+      - MODEL_PATH=/app/waf_model.pkl
+    volumes:
+      - ./ml_scorer/waf_model.pkl:/app/waf_model.pkl
     networks:
       - waf_net
 
