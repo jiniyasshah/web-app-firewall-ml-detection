@@ -139,15 +139,33 @@ func (h *APIHandler) addRecord(w http.ResponseWriter, r *http.Request) {
 		req.TTL = 300
 	}
 
-	// 10. Check for Duplicates (NEW)
-	exists, err := database.CheckDuplicateDNSRecord(h.MongoClient, req.DomainID, recordName, req.Type, req.Content)
-	if err != nil {
-		http.Error(w, "Database error checking duplicates", http.StatusInternalServerError)
-		return
-	}
-	if exists {
-		http.Error(w, "Duplicate record already exists", http.StatusConflict)
-		return
+	// 10. Check for Conflicts
+	// CRITICAL FIX: Distinguish between "Duplicate" and "Conflict"
+	if req.Type == "A" || req.Type == "CNAME" {
+		// For A/CNAME, we enforce "Single Origin".
+		// We use CheckDNSRecordExists which IGNORES content.
+		exists, err := database.CheckDNSRecordExists(h.MongoClient, req.DomainID, recordName, req.Type)
+		if err != nil {
+			http.Error(w, "Database error checking conflicts", http.StatusInternalServerError)
+			return
+		}
+		if exists {
+			// If we found ANY record with this name/type, we reject it.
+			// This prevents adding a second IP for the same name.
+			http.Error(w, "A record of this type already exists for this name. Multiple targets are not supported.", http.StatusConflict)
+			return
+		}
+	} else {
+		// For MX, TXT, NS, we allow multiple records but prevent EXACT duplicates.
+		exists, err := database.CheckDuplicateDNSRecord(h.MongoClient, req.DomainID, recordName, req.Type, req.Content)
+		if err != nil {
+			http.Error(w, "Database error checking duplicates", http.StatusInternalServerError)
+			return
+		}
+		if exists {
+			http.Error(w, "Duplicate record already exists", http.StatusConflict)
+			return
+		}
 	}
 
 	// 11. Add to MongoDB (Source of Truth for User Display & Proxy Routing)

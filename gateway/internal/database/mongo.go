@@ -198,8 +198,9 @@ func CheckDuplicateDNSRecord(client *mongo.Client, domainID, name, rType, conten
 	return true, nil
 }
 
-// [NEW] CheckDNSRecordExists checks if ANY record of this type exists for the name.
+// CheckDNSRecordExists checks if ANY record of this type exists for the name.
 // Used for A and CNAME to enforce "One Target per Hostname".
+// THIS IS THE FUNCTION THAT PREVENTS MULTIPLE IPs FOR THE SAME RECORD.
 func CheckDNSRecordExists(client *mongo.Client, domainID, name, rType string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
@@ -210,6 +211,8 @@ func CheckDNSRecordExists(client *mongo.Client, domainID, name, rType string) (b
 		"type":      rType,
 	}
 
+	// We do NOT include 'content' in the filter here. 
+	// If ANY 'A' record exists for 'example.com', we return true.
 	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, filter).Err()
 	if err == mongo.ErrNoDocuments {
 		return false, nil
