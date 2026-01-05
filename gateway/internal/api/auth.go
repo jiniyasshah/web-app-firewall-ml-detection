@@ -118,7 +118,7 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 		// Dynamic Settings
 		Domain:   cookieDomain,
 		Secure:   true,               // True in Prod (HTTPS), False in Dev (HTTP)
-		SameSite: http.SameSiteLaxMode, // Lax is best for normal navigation
+		SameSite: http.SameSiteNoneMode, // Lax is best for normal navigation
 	})
 
 	// Return User Info
