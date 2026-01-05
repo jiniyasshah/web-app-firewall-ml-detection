@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"strings" // <--- ADD THIS IMPORT
+	"strings"
 
 	"web-app-firewall-ml-detection/internal/database"
 )
@@ -18,13 +18,15 @@ type DNSRecordRequest struct {
 	Proxied  bool   `json:"proxied"` // TRUE = Through WAF, FALSE = Direct
 }
 
-// ManageRecords handles GET, POST, DELETE for DNS records
+// ManageRecords handles GET, POST, PUT, DELETE for DNS records
 func (h *APIHandler) ManageRecords(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		h.listRecords(w, r)
 	case http.MethodPost:
 		h.addRecord(w, r)
+	case http.MethodPut:
+		h.toggleProxy(w, r)
 	case http.MethodDelete:
 		h.deleteRecord(w, r)
 	default:
@@ -122,6 +124,98 @@ func (h *APIHandler) addRecord(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// PUT /api/dns/records?domain_id=xxx&record_id=yyy
+// Body: { "proxied": true/false }
+func (h *APIHandler) toggleProxy(w http.ResponseWriter, r *http.Request) {
+	domainID := r.URL.Query().Get("domain_id")
+	recordID := r.URL.Query().Get("record_id")
+
+	if domainID == "" || recordID == "" {
+		http.Error(w, "domain_id and record_id are required", http.StatusBadRequest)
+		return
+	}
+
+	// 1. Parse the new state
+	var req struct {
+		Proxied bool `json:"proxied"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Security Checks
+	domain, err := database.GetDomainByID(h.MongoClient, domainID)
+	if err != nil {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+	userID := r.Context().Value("user_id").(string)
+	if domain.UserID != userID {
+		http.Error(w, "Unauthorized", http.StatusForbidden)
+		return
+	}
+
+	// 3. Get the OLD record state (to know what to delete from SQL)
+	oldRecord, err := database.GetDNSRecordByID(h.MongoClient, recordID)
+	if err != nil {
+		http.Error(w, "Record not found", http.StatusNotFound)
+		return
+	}
+
+	// 4. Calculate what the SQL database currently holds (Old State)
+	// We need to delete this specific entry to avoid duplicates or conflicts
+	wafIP := os.Getenv("WAF_PUBLIC_IP")
+	if wafIP == "" {
+		wafIP = "139.59.76.127"
+	}
+
+	contentToDelete := oldRecord.Content
+	typeToDelete := oldRecord.Type
+
+	// logic: if it *was* proxied, SQL has the WAF IP and Type A
+	shouldHaveBeenProxied := oldRecord.Proxied
+	// Safety check: TXT/MX/NS/SOA never proxy
+	if oldRecord.Type == "TXT" || oldRecord.Type == "MX" || oldRecord.Type == "NS" || oldRecord.Type == "SOA" {
+		shouldHaveBeenProxied = false
+	}
+
+	if shouldHaveBeenProxied {
+		contentToDelete = wafIP
+		typeToDelete = "A"
+	}
+
+	// 5. Delete OLD entry from PowerDNS
+	err = database.DeletePowerDNSRecordByContent(oldRecord.Name, typeToDelete, contentToDelete)
+	if err != nil {
+		http.Error(w, "Failed to update DNS (Delete Phase): "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 6. Update MongoDB to NEW state
+	err = database.UpdateDNSRecordProxy(h.MongoClient, recordID, req.Proxied)
+	if err != nil {
+		http.Error(w, "Failed to update database", http.StatusInternalServerError)
+		return
+	}
+
+	// 7. Add NEW entry to PowerDNS
+	// The Add function handles the logic: if req.Proxied is true, it inserts WAF IP. If false, Real IP.
+	// It also respects the internal check for TXT/MX/NS/SOA (wont proxy them even if req.Proxied is true)
+	err = database.AddPowerDNSRecord(oldRecord.Name, oldRecord.Type, oldRecord.Content, req.Proxied, wafIP)
+	if err != nil {
+		http.Error(w, "Failed to update DNS (Add Phase): "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "success",
+		"message": "Proxy status updated",
+		"proxied": req.Proxied,
+	})
+}
+
 // GET /api/dns/records? domain_id=xxx
 func (h *APIHandler) listRecords(w http.ResponseWriter, r *http.Request) {
 	domainID := r.URL.Query().Get("domain_id")
@@ -189,7 +283,13 @@ func (h *APIHandler) deleteRecord(w http.ResponseWriter, r *http.Request) {
 	sqlType := record.Type
 	sqlContent := record.Content
 
-	if record.Proxied {
+	// Safety check again for verification records
+	isProxiable := true
+	if record.Type == "TXT" || record.Type == "MX" || record.Type == "NS" || record.Type == "SOA" {
+		isProxiable = false
+	}
+
+	if record.Proxied && isProxiable {
 		sqlType = "A"
 		wafIP := os.Getenv("WAF_PUBLIC_IP")
 		if wafIP == "" {

@@ -81,7 +81,6 @@ func GetUserByID(client *mongo.Client, id string) (*detector.User, error) {
 	return &user, nil
 }
 
-
 // ---------------------------------------------------------
 // DOMAIN MANAGEMENT
 // ---------------------------------------------------------
@@ -154,7 +153,7 @@ type DNSRecord struct {
 	DomainID  string    `bson:"domain_id" json:"domain_id"`
 	Name      string    `bson:"name" json:"name"`
 	Type      string    `bson:"type" json:"type"`
-	Content   string    `bson:"content" json:"content"` // This is the ORIGIN IP/Target (User View)
+	Content   string    `bson:"content" json:"content"` // This is the ORIGIN IP (User View)
 	TTL       int       `bson:"ttl" json:"ttl"`
 	Proxied   bool      `bson:"proxied" json:"proxied"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
@@ -215,6 +214,49 @@ func DeleteDNSRecord(client *mongo.Client, recordID string) error {
 
 	_, err := client.Database(DBName).Collection("dns_records").DeleteOne(ctx, bson.M{"_id": recordID})
 	return err
+}
+
+// UpdateDNSRecordProxy updates the proxied status of a record
+func UpdateDNSRecordProxy(client *mongo.Client, recordID string, proxied bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	collection := client.Database(DBName).Collection("dns_records")
+	filter := bson.M{"_id": recordID}
+	update := bson.M{"$set": bson.M{"proxied": proxied}}
+
+	_, err := collection.UpdateOne(ctx, filter, update)
+	return err
+}
+
+// GetOriginIP resolves the backend IP for the Proxy from the user's DNS records
+func GetOriginIP(client *mongo.Client, host string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Fast timeout for proxy
+	defer cancel()
+
+	var record DNSRecord
+
+	// 1. Try to find an exact 'A' record match first
+	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
+		"name": host,
+		"type": "A",
+	}).Decode(&record)
+
+	if err == nil {
+		return record.Content, nil
+	}
+
+	// 2. If no A record, try to find a 'CNAME' record
+	err = client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
+		"name": host,
+		"type": "CNAME",
+	}).Decode(&record)
+
+	if err == nil {
+		return record.Content, nil
+	}
+
+	return "", err
 }
 
 // ---------------------------------------------------------
@@ -438,34 +480,4 @@ func compileRegexes(rules []detector.WAFRule) []detector.WAFRule {
 		}
 	}
 	return rules
-}
-
-// [NEW] GetOriginIP resolves the backend IP for the Proxy from the user's DNS records
-func GetOriginIP(client *mongo.Client, host string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Fast timeout for proxy
-	defer cancel()
-
-	var record DNSRecord
-
-	// 1. Try to find an exact 'A' record match first
-	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
-		"name": host,
-		"type": "A",
-	}).Decode(&record)
-
-	if err == nil {
-		return record.Content, nil
-	}
-
-	// 2. If no A record, try to find a 'CNAME' record
-	err = client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
-		"name": host,
-		"type": "CNAME",
-	}).Decode(&record)
-
-	if err == nil {
-		return record.Content, nil
-	}
-
-	return "", err
 }
