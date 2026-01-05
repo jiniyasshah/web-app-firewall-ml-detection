@@ -96,8 +96,6 @@ func main() {
 		log.Fatalf("❌ Critical: Could not load pages/502.html: %v", err)
 	}
 
-
-
 	// 5. REVERSE PROXY LOGIC
 	director := func(req *http.Request) {
 		incomingHost := req.Host
@@ -122,16 +120,10 @@ func main() {
 
 		req.URL.Scheme = targetURL.Scheme
 		req.URL.Host = targetURL.Host
-		
-		// [CRITICAL FIX] Force the Host header to match the client's requested domain.
-		// Vercel/Cloudflare REQUIRE this to route traffic to the correct project.
-		req.Host = incomingHost 
-
 		req.Header.Set("X-Forwarded-Host", incomingHost)
 		req.Header.Set("X-Forwarded-Proto", "https")
 		req.Header.Set("X-Real-IP", req.RemoteAddr)
 	}
-
 
 	// --- DEFINE THE PROXY WITH ERROR HANDLER ---
 	proxy := &httputil.ReverseProxy{
