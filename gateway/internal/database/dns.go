@@ -49,6 +49,7 @@ func CloseDNS() {
 // AddPowerDNSRecord inserts a new DNS record into PowerDNS (Resolution Backend)
 // CRITICAL FIX: If 'proxied' is true, we ALWAYS create an 'A' record pointing to WAF IP,
 // regardless of whether the user gave us a CNAME or A record.
+// AddPowerDNSRecord inserts a new DNS record into PowerDNS
 func AddPowerDNSRecord(name, recordType, content string, proxied bool, wafIP string) error {
 	if dnsDB == nil {
 		return fmt.Errorf("DNS database not connected")
@@ -64,12 +65,22 @@ func AddPowerDNSRecord(name, recordType, content string, proxied bool, wafIP str
 	}
 
 	// --- LOGIC FOR PROXYING ---
-	// If Proxied: Public DNS sees Type=A, Content=WAF_IP
-	// If Not Proxied: Public DNS sees Type=UserType, Content=UserContent
+	// 1. Determine if we SHOULD proxy.
+	// We generally respect the user's choice ('proxied'), BUT we force it to FALSE
+	// for "meta" records like TXT, MX, NS, SOA. These must be publicly visible
+	// for verification (e.g. _vercel-verify, google-site-verification).
+	shouldProxy := proxied
+	if recordType == "TXT" || recordType == "MX" || recordType == "NS" || recordType == "SOA" {
+		shouldProxy = false
+	}
+
+	// 2. Prepare the final data for the Public DNS
 	finalType := recordType
 	finalContent := content
 
-	if proxied {
+	// If proxying is enabled (and allowed for this type), we mask the real destination
+	// by publishing an 'A' record pointing to our WAF IP.
+	if shouldProxy {
 		finalType = "A"
 		finalContent = wafIP
 	}
