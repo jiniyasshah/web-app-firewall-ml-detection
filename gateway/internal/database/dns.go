@@ -47,6 +47,7 @@ func CloseDNS() {
 }
 
 // AddPowerDNSRecord inserts a new DNS record into PowerDNS (Resolution Backend)
+// If 'proxied' is true and record is 'A', the content is replaced with WAF IP.
 func AddPowerDNSRecord(name, recordType, content string, proxied bool, wafIP string) error {
 	// Check if database is connected
 	if dnsDB == nil {
@@ -120,18 +121,8 @@ func GetPowerDNSRecords(domainName string) ([]map[string]interface{}, error) {
 	return records, nil
 }
 
-// DeletePowerDNSRecord removes a record from PowerDNS by ID (Legacy/Internal)
-func DeletePowerDNSRecord(recordID string) error {
-	if dnsDB == nil {
-		return fmt.Errorf("DNS database not connected")
-	}
-
-	_, err := dnsDB.Exec("DELETE FROM records WHERE id = ?", recordID)
-	return err
-}
-
-// DeletePowerDNSRecordByContent removes a record matching name, type, and content
-// Used when syncing deletions from MongoDB where we don't know the MySQL ID
+// DeletePowerDNSRecordByContent removes a record matching name, type, and content.
+// Used when syncing deletions from MongoDB where we don't know the MySQL ID.
 func DeletePowerDNSRecordByContent(name, recordType, content string) error {
 	if dnsDB == nil {
 		return fmt.Errorf("DNS database not connected")
@@ -206,7 +197,6 @@ func CreateDNSZone(domainName string, nameservers []string) error {
 	}
 
 	// Add SOA record (required for every zone)
-	// FIX: Added space between MNAME and RNAME (nameserver and hostmaster)
 	soaContent := fmt.Sprintf("%s hostmaster.%s 1 10800 3600 604800 3600",
 		nameservers[0], domainName)
 	

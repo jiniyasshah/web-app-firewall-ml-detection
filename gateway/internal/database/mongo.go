@@ -145,7 +145,6 @@ func GetDomainByID(client *mongo.Client, id string) (*detector.Domain, error) {
 	return &domain, nil
 }
 
-
 // ---------------------------------------------------------
 // DNS RECORD MANAGEMENT (MongoDB - User View)
 // ---------------------------------------------------------
@@ -155,7 +154,7 @@ type DNSRecord struct {
 	DomainID  string    `bson:"domain_id" json:"domain_id"`
 	Name      string    `bson:"name" json:"name"`
 	Type      string    `bson:"type" json:"type"`
-	Content   string    `bson:"content" json:"content"` // This is the ORIGIN IP (User View)
+	Content   string    `bson:"content" json:"content"` // This is the ORIGIN IP/Target (User View)
 	TTL       int       `bson:"ttl" json:"ttl"`
 	Proxied   bool      `bson:"proxied" json:"proxied"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
@@ -340,7 +339,6 @@ func GetLogsForUser(client *mongo.Client, userID string, limit int64) ([]interfa
 	}
 
 	// 2.Filter logs by Host Header matching user's domains
-	// Note: In a production V2, we should store 'domain_id' directly in the logs collection for efficiency.
 	domainNames := make([]string, len(domains))
 	for i, d := range domains {
 		domainNames[i] = d.Name

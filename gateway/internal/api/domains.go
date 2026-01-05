@@ -92,45 +92,20 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Provision PowerDNS and Default Records
+	// 4. Provision PowerDNS Zone (SOA and NS only)
 	err = database.CreateDNSZone(domain.Name, domain.Nameservers)
 	if err != nil {
 		log.Printf("ERROR: Failed to create DNS Zone: %v", err)
-	} else {
-		// Create the root A record pointing to WAF (Default setup)
-		// We add it to MongoDB (Display) AND PowerDNS (Resolution)
-		
-		// Mongo
-		mongoRecord := database.DNSRecord{
-			DomainID: createdDomain.ID, // We need the ID from CreateDomain? createdDomain has it.
-			Name:     domain.Name,
-			Type:     "A",
-			Content:  h.WafPublicIP, // Initial setup points to WAF usually, or we leave empty? 
-			                       // Code below used WafPublicIP. 
-			TTL:      300,
-			Proxied:  false,
-		}
-		// If CreateDomain didn't return ID (it does in struct), we are good.
-		// NOTE: createdDomain.ID might be empty if CreateDomain didn't populate it on the return struct?
-		// Looking at mongo.go: "if domain.ID == "" ... InsertOne". The returned struct in `mongo.go` is the same passed in.
-		// So we must ensure `createdDomain` has the ID.
-		// Actually CreateDomain in `mongo.go` sets the ID if empty. It returns the modified domain.
-		
-		_, _ = database.CreateDNSRecord(h.MongoClient, mongoRecord)
-
-		// SQL
-		err = database.AddPowerDNSRecord(domain.Name, "A", h.WafPublicIP, false, "")
-		if err != nil {
-			log.Printf("ERROR: Failed to create A record: %v", err)
-		}
 	}
+
+	// NOTE: We do NOT create a default A record here. The zone is created empty.
+	// The user must verify the domain and then explicitly add records.
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(createdDomain)
 }
 
 // checkRegistrarRDAP queries the Official Registry (RDAP) to find the configured Nameservers.
-// This is immune to "Child Lying" because we talk to the Registry, not the DNS server.
 func checkRegistrarRDAP(domain string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -167,8 +142,6 @@ func checkRegistrarRDAP(domain string) ([]string, error) {
 
 	var nameservers []string
 	for _, ns := range rdapResp.Nameservers {
-		// RDAP returns clean names "ns1.example.com", usually without trailing dot.
-		// We trim just in case.
 		cleanName := strings.TrimSuffix(ns.LdhName, ".")
 		nameservers = append(nameservers, cleanName)
 	}
@@ -204,7 +177,6 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	foundNS, err := checkRegistrarRDAP(domain.Name)
 	if err != nil {
 		log.Printf("RDAP Lookup failed: %v", err)
-		// We return the error so the user knows something went wrong
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error": "Verification Unavailable", 
@@ -213,13 +185,12 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. STRICT VERIFICATION: Ensure ALL assigned NS are present at Registrar
+	// 5. STRICT VERIFICATION
 	matchedCount := 0
 	
 	for _, assignedNS := range domain.Nameservers {
 		found := false
 		for _, liveNS := range foundNS {
-			// Case-insensitive comparison
 			if strings.EqualFold(liveNS, assignedNS) {
 				found = true
 				break
@@ -230,7 +201,6 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Pass if we found ALL assigned nameservers in the RDAP response
 	verified := (matchedCount == len(domain.Nameservers)) && (len(domain.Nameservers) > 0)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -244,7 +214,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "active",
-			"message": "Domain successfully verified! WAF protection enabled.",
+			"message": "Domain successfully verified! You may now add DNS records.",
 		})
 	} else {
 		w.WriteHeader(http.StatusConflict)
@@ -252,7 +222,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 			"status":             "pending_verification",
 			"message":            "Verification failed. Your Registrar nameservers do not match the assigned ones.",
 			"assigned_ns":        domain.Nameservers,
-			"found_at_registrar": foundNS, // This will now show the REAL list (e.g., ["niraj", "dhiren"])
+			"found_at_registrar": foundNS,
 		})
 	}
 }
