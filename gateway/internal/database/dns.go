@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -10,22 +11,32 @@ import (
 // Package-level variable for MySQL connection
 var dnsDB *sql.DB
 
-// ConnectDNS establishes connection to PowerDNS MySQL database
+// ConnectDNS establishes connection to PowerDNS MySQL database with retries
 func ConnectDNS(user, pass, host, dbName string) error {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s?parseTime=true", user, pass, host, dbName)
 
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return err
+	var db *sql.DB
+	var err error
+
+	// Retry logic: Try 10 times, waiting 2 seconds between attempts
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		db, err = sql.Open("mysql", dsn)
+		if err == nil {
+			err = db.Ping()
+			if err == nil {
+				// Success!
+				fmt.Println("✅ Connected to DNS SQL Database")
+				dnsDB = db
+				return nil
+			}
+		}
+
+		fmt.Printf("⚠️  DNS DB unavailable (Attempt %d/%d): %v. Retrying in 2s...\n", i+1, maxRetries, err)
+		time.Sleep(2 * time.Second)
 	}
 
-	// Test the connection
-	if err := db.Ping(); err != nil {
-		return err
-	}
-
-	dnsDB = db
-	return nil
+	return fmt.Errorf("failed to connect to DNS DB after %d attempts: %v", maxRetries, err)
 }
 
 // CloseDNS closes the MySQL connection
