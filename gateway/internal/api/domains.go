@@ -29,12 +29,13 @@ type RDAPResponse struct {
 	} `json:"nameservers"`
 }
 
-func getRootDomain(domain string) string {
-	parts := strings.Split(domain, ".")
-	if len(parts) < 2 {
-		return domain
+// [NEW] Helper to extract root domain (e.g. "www.example.com" -> "example.com")
+func getRootDomain(host string) string {
+	parts := strings.Split(host, ".")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2] + "." + parts[len(parts)-1]
 	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	return host
 }
 
 func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {

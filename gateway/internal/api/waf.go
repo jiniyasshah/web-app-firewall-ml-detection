@@ -47,6 +47,12 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 
 	h.rulesMutex.RLock()
 	currentRules, exists := h.domainRules[host]
+	
+	// [FIX] Fallback: If specific subdomain rules aren't found, try the Root Domain
+	if !exists {
+		rootHost := getRootDomain(host)
+		currentRules, exists = h.domainRules[rootHost]
+	}
 	h.rulesMutex.RUnlock()
 
 	// ---------------------------------------------------------
