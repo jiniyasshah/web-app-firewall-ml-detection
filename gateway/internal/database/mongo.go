@@ -480,3 +480,25 @@ func compileRegexes(rules []detector.WAFRule) []detector.WAFRule {
 	}
 	return rules
 }
+
+// [NEW] IsHostAllowed checks if a host is either a registered domain OR a valid DNS record
+func IsHostAllowed(client *mongo.Client, host string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// 1. Check if it matches a Root Domain
+	var domain detector.Domain
+	err := client.Database(DBName).Collection("domains").FindOne(ctx, bson.M{"name": host}).Decode(&domain)
+	if err == nil {
+		return true // Found exact match in domains
+	}
+
+	// 2. Check if it matches a DNS Record (e.g. www.example.com)
+	var record DNSRecord
+	err = client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{"name": host}).Decode(&record)
+	if err == nil {
+		return true // Found match in dns_records
+	}
+
+	return false
+}

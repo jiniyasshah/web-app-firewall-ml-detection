@@ -30,29 +30,29 @@ func getEnv(key, fallback string) string {
 
 // CORSMiddleware handles Preflight and Headers
 func CORSMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        envOrigins := getEnv("FRONTEND_URL", "https://www.minishield.tech")
-        allowedOrigins := strings.Split(envOrigins, ",")
-        requestOrigin := r.Header.Get("Origin")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envOrigins := getEnv("FRONTEND_URL", "https://www.minishield.tech")
+		allowedOrigins := strings.Split(envOrigins, ",")
+		requestOrigin := r.Header.Get("Origin")
 
-        for _, origin := range allowedOrigins {
-            if strings.TrimSpace(origin) == requestOrigin {
-                w.Header().Set("Access-Control-Allow-Origin", requestOrigin)
-                break
-            }
-        }
+		for _, origin := range allowedOrigins {
+			if strings.TrimSpace(origin) == requestOrigin {
+				w.Header().Set("Access-Control-Allow-Origin", requestOrigin)
+				break
+			}
+		}
 
-        w.Header().Set("Access-Control-Allow-Credentials", "true")
-        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 
-        if r.Method == "OPTIONS" {
-            w.WriteHeader(http.StatusOK)
-            return
-        }
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 
-        next.ServeHTTP(w, r)
-    })
+		next.ServeHTTP(w, r)
+	})
 }
 
 func main() {
@@ -61,7 +61,7 @@ func main() {
 	defaultOrigin := getEnv("ORIGIN_URL", "http://origin:3000")
 	mlURL := getEnv("ML_URL", "http://ml_scorer:8000/predict")
 	wafPublicIP := getEnv("WAF_PUBLIC_IP", "64.227.156.70")
-	
+
 	dnsUser := getEnv("DNS_DB_USER", "pdns")
 	dnsPass := getEnv("DNS_DB_PASS", "pdns_password")
 	dnsHost := getEnv("DNS_DB_HOST", "dns_sql_db")
@@ -87,15 +87,14 @@ func main() {
 	rateLimiter := limiter.New(100, 1*time.Minute)
 
 	page404, err := os.ReadFile("pages/404.html")
-    if err != nil {
-        log.Fatalf("❌ Critical: Could not load pages/404.html: %v", err)
-    }
+	if err != nil {
+		log.Fatalf("❌ Critical: Could not load pages/404.html: %v", err)
+	}
 
 	page502, err := os.ReadFile("pages/502.html")
-    if err != nil {
-        log.Fatalf("❌ Critical: Could not load pages/502.html: %v", err)
-    }
-
+	if err != nil {
+		log.Fatalf("❌ Critical: Could not load pages/502.html: %v", err)
+	}
 
 	// 5. REVERSE PROXY LOGIC
 	director := func(req *http.Request) {
@@ -126,22 +125,22 @@ func main() {
 		req.Header.Set("X-Real-IP", req.RemoteAddr)
 	}
 
-// --- DEFINE THE PROXY WITH ERROR HANDLER ---
-    proxy := &httputil.ReverseProxy{
-        Director: director,
-        ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-            log.Printf("🔥 Proxy Error for %s: %v", r.Host, err)
-            
-            if r.Context().Err() != nil {
-                return 
-            }
-            
-            w.WriteHeader(http.StatusBadGateway)
-            w.Header().Set("Content-Type", "text/html")
-            w.Write(page502)
-        },
-    }
-	
+	// --- DEFINE THE PROXY WITH ERROR HANDLER ---
+	proxy := &httputil.ReverseProxy{
+		Director: director,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("🔥 Proxy Error for %s: %v", r.Host, err)
+
+			if r.Context().Err() != nil {
+				return
+			}
+
+			w.WriteHeader(http.StatusBadGateway)
+			w.Header().Set("Content-Type", "text/html")
+			w.Write(page502)
+		},
+	}
+
 	// 6. INIT API HANDLER
 	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, defaultOrigin, wafPublicIP, page404)
 
@@ -175,13 +174,13 @@ func main() {
 			return nil
 		}
 
-		// 2. Allow User Domains
-		foundDomain, err := database.GetDomainByName(client, host)
-		if err != nil || foundDomain == nil {
-			return fmt.Errorf("host %s not allowed", host)
+		// 2. Allow User Domains & Subdomains
+		// CHANGED: Now uses IsHostAllowed to check both Domains and DNS Records
+		if database.IsHostAllowed(client, host) {
+			return nil
 		}
 
-		return nil
+		return fmt.Errorf("host %s not allowed", host)
 	}
 
 	certManager := autocert.Manager{
