@@ -92,12 +92,34 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Provision PowerDNS
+	// 4. Provision PowerDNS and Default Records
 	err = database.CreateDNSZone(domain.Name, domain.Nameservers)
 	if err != nil {
 		log.Printf("ERROR: Failed to create DNS Zone: %v", err)
 	} else {
-		err = database.AddDNSRecord(domain.Name, "A", h.WafPublicIP, false, "")
+		// Create the root A record pointing to WAF (Default setup)
+		// We add it to MongoDB (Display) AND PowerDNS (Resolution)
+		
+		// Mongo
+		mongoRecord := database.DNSRecord{
+			DomainID: createdDomain.ID, // We need the ID from CreateDomain? createdDomain has it.
+			Name:     domain.Name,
+			Type:     "A",
+			Content:  h.WafPublicIP, // Initial setup points to WAF usually, or we leave empty? 
+			                       // Code below used WafPublicIP. 
+			TTL:      300,
+			Proxied:  false,
+		}
+		// If CreateDomain didn't return ID (it does in struct), we are good.
+		// NOTE: createdDomain.ID might be empty if CreateDomain didn't populate it on the return struct?
+		// Looking at mongo.go: "if domain.ID == "" ... InsertOne". The returned struct in `mongo.go` is the same passed in.
+		// So we must ensure `createdDomain` has the ID.
+		// Actually CreateDomain in `mongo.go` sets the ID if empty. It returns the modified domain.
+		
+		_, _ = database.CreateDNSRecord(h.MongoClient, mongoRecord)
+
+		// SQL
+		err = database.AddPowerDNSRecord(domain.Name, "A", h.WafPublicIP, false, "")
 		if err != nil {
 			log.Printf("ERROR: Failed to create A record: %v", err)
 		}

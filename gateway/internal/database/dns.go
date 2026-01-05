@@ -46,8 +46,8 @@ func CloseDNS() {
 	}
 }
 
-// AddDNSRecord inserts a new DNS record into PowerDNS
-func AddDNSRecord(name, recordType, content string, proxied bool, wafIP string) error {
+// AddPowerDNSRecord inserts a new DNS record into PowerDNS (Resolution Backend)
+func AddPowerDNSRecord(name, recordType, content string, proxied bool, wafIP string) error {
 	// Check if database is connected
 	if dnsDB == nil {
 		return fmt.Errorf("DNS database not connected")
@@ -79,8 +79,8 @@ func AddDNSRecord(name, recordType, content string, proxied bool, wafIP string) 
 	return err
 }
 
-// GetDNSRecordsByDomain fetches all DNS records for a domain from PowerDNS
-func GetDNSRecordsByDomain(domainName string) ([]map[string]interface{}, error) {
+// GetPowerDNSRecords fetches all DNS records for a domain from PowerDNS
+func GetPowerDNSRecords(domainName string) ([]map[string]interface{}, error) {
 	if dnsDB == nil {
 		return nil, fmt.Errorf("DNS database not connected")
 	}
@@ -120,13 +120,30 @@ func GetDNSRecordsByDomain(domainName string) ([]map[string]interface{}, error) 
 	return records, nil
 }
 
-// DeleteDNSRecord removes a record from PowerDNS by ID
-func DeleteDNSRecord(recordID string) error {
+// DeletePowerDNSRecord removes a record from PowerDNS by ID (Legacy/Internal)
+func DeletePowerDNSRecord(recordID string) error {
 	if dnsDB == nil {
 		return fmt.Errorf("DNS database not connected")
 	}
 
 	_, err := dnsDB.Exec("DELETE FROM records WHERE id = ?", recordID)
+	return err
+}
+
+// DeletePowerDNSRecordByContent removes a record matching name, type, and content
+// Used when syncing deletions from MongoDB where we don't know the MySQL ID
+func DeletePowerDNSRecordByContent(name, recordType, content string) error {
+	if dnsDB == nil {
+		return fmt.Errorf("DNS database not connected")
+	}
+
+	// We match name, type, and content to ensure we don't delete wrong records
+	// (e.g. if multiple A records exist for round-robin)
+	_, err := dnsDB.Exec(`
+		DELETE FROM records 
+		WHERE name = ? AND type = ? AND content = ?
+	`, name, recordType, content)
+	
 	return err
 }
 

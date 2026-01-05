@@ -82,33 +82,40 @@ func (h *APIHandler) addRecord(w http.ResponseWriter, r *http.Request) {
 		req.TTL = 300
 	}
 
-	// 8.Add to PowerDNS (MySQL)
-	err = database.AddDNSRecord(recordName, req.Type, req.Content, req.Proxied, wafIP)
+	// 8.Add to MongoDB (Source of Truth for User Display)
+	newRecord := database.DNSRecord{
+		DomainID: req.DomainID,
+		Name:     recordName,
+		Type:     req.Type,
+		Content:  req.Content, // Store the ORIGIN IP
+		TTL:      req.TTL,
+		Proxied:  req.Proxied,
+	}
+
+	recordID, err := database.CreateDNSRecord(h.MongoClient, newRecord)
 	if err != nil {
-		http.Error(w, "DNS Database Error:  "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Database Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	newRecord.ID = recordID
+
+	// 9.Add to PowerDNS (Resolution Backend)
+	// database.AddPowerDNSRecord handles the proxied logic internally (swapping content for WAF IP)
+	err = database.AddPowerDNSRecord(recordName, req.Type, req.Content, req.Proxied, wafIP)
+	if err != nil {
+		// Rollback MongoDB if PowerDNS fails? For now just error.
+		http.Error(w, "DNS Propagation Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 9.Store in MongoDB for internal routing (only for A records when proxied)
-	if req.Type == "A" && req.Proxied {
-		err = database.AddRoutingRecord(h.MongoClient, req.DomainID, recordName, req.Content)
-		if err != nil {
-			http.Error(w, "Routing Database Error: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
+	// Note: We no longer need separate Routing records.
+	// The WAF should lookup the Origin IP from the dns_records collection.
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":   "success",
+		"status":  "success",
 		"message": "DNS record added successfully",
-		"record":  map[string]interface{}{
-			"name":    recordName,
-			"type":    req.Type,
-			"content": req.Content,
-			"proxied": req.Proxied,
-			"ttl":     req.TTL,
-		},
+		"record":  newRecord, // Return the clean record with ID
 	})
 }
 
@@ -133,8 +140,8 @@ func (h *APIHandler) listRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2.Get records from PowerDNS
-	records, err := database.GetDNSRecordsByDomain(domain.Name)
+	// 2.Get records from MongoDB (Clean User View)
+	records, err := database.GetDNSRecords(h.MongoClient, domainID)
 	if err != nil {
 		http.Error(w, "Failed to fetch records: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -167,23 +174,43 @@ func (h *APIHandler) deleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2.Delete from PowerDNS (MySQL)
-	err = database.DeleteDNSRecord(recordID)
+	// 2. Fetch the record details from MongoDB first (to know what to delete from SQL)
+	record, err := database.GetDNSRecordByID(h.MongoClient, recordID)
+	if err != nil {
+		http.Error(w, "Record not found", http.StatusNotFound)
+		return
+	}
+
+	// 3. Determine the content stored in SQL
+	// If it was proxied, SQL has the WAF IP. If not, it has the Origin IP.
+	sqlContent := record.Content
+	if record.Proxied && record.Type == "A" {
+		wafIP := os.Getenv("WAF_PUBLIC_IP")
+		if wafIP == "" {
+			wafIP = "139.59.76.127"
+		}
+		sqlContent = wafIP
+	}
+
+	// 4. Delete from PowerDNS (MySQL)
+	err = database.DeletePowerDNSRecordByContent(record.Name, record.Type, sqlContent)
+	if err != nil {
+		// Log error but continue to delete from Mongo to keep UI consistent?
+		// Or fail. Let's fail so they can retry.
+		http.Error(w, "Failed to delete from DNS backend: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 5. Delete from MongoDB
+	err = database.DeleteDNSRecord(h.MongoClient, recordID)
 	if err != nil {
 		http.Error(w, "Failed to delete record: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 3.Also remove from routing collection if it exists
-	err = database.DeleteRoutingRecord(h.MongoClient, recordID)
-	if err != nil {
-		// Log but don't fail - routing record might not exist
-		// log.Printf("Warning: Could not delete routing record:  %v", err)
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status":   "success",
+		"status":  "success",
 		"message": "Record deleted successfully",
 	})
 }

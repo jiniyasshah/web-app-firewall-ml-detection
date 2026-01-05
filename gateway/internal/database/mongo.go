@@ -147,6 +147,78 @@ func GetDomainByID(client *mongo.Client, id string) (*detector.Domain, error) {
 
 
 // ---------------------------------------------------------
+// DNS RECORD MANAGEMENT (MongoDB - User View)
+// ---------------------------------------------------------
+
+type DNSRecord struct {
+	ID        string    `bson:"_id,omitempty" json:"id"`
+	DomainID  string    `bson:"domain_id" json:"domain_id"`
+	Name      string    `bson:"name" json:"name"`
+	Type      string    `bson:"type" json:"type"`
+	Content   string    `bson:"content" json:"content"` // This is the ORIGIN IP (User View)
+	TTL       int       `bson:"ttl" json:"ttl"`
+	Proxied   bool      `bson:"proxied" json:"proxied"`
+	CreatedAt time.Time `bson:"created_at" json:"created_at"`
+}
+
+func CreateDNSRecord(client *mongo.Client, record DNSRecord) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	if record.ID == "" {
+		record.ID = primitive.NewObjectID().Hex()
+	}
+	record.CreatedAt = time.Now()
+
+	_, err := client.Database(DBName).Collection("dns_records").InsertOne(ctx, record)
+	if err != nil {
+		return "", err
+	}
+	return record.ID, nil
+}
+
+func GetDNSRecords(client *mongo.Client, domainID string) ([]DNSRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	cursor, err := client.Database(DBName).Collection("dns_records").Find(ctx, bson.M{"domain_id": domainID})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []DNSRecord
+	if err = cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+	// Return empty slice instead of nil for JSON consistency
+	if records == nil {
+		records = []DNSRecord{}
+	}
+	return records, nil
+}
+
+func GetDNSRecordByID(client *mongo.Client, recordID string) (*DNSRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	var record DNSRecord
+	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{"_id": recordID}).Decode(&record)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func DeleteDNSRecord(client *mongo.Client, recordID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	_, err := client.Database(DBName).Collection("dns_records").DeleteOne(ctx, bson.M{"_id": recordID})
+	return err
+}
+
+// ---------------------------------------------------------
 // RULE MANAGEMENT
 // ---------------------------------------------------------
 
@@ -327,25 +399,6 @@ func GetAllPolicies(client *mongo.Client) ([]detector.RulePolicy, error) {
 	return policies, nil
 }
 
-// UpdateDomainTarget saves the REAL Origin IP for the WAF to use
-func UpdateDomainRouting(client *mongo.Client, domainName string, originIP string, proxied bool) error {
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-
-    collection := client.Database("waf").Collection("domains")
-    filter := bson.M{"name": domainName}
-    
-    update := bson.M{
-        "$set": bson.M{
-            "target_ip": originIP, // The Secret Real IP
-            "proxied":   proxied,
-            "updated_at": time.Now(),
-        },
-    }
-    _, err := collection.UpdateOne(ctx, filter, update)
-    return err
-}
-
 // UpdateDomainStatus activates the domain after verification
 func UpdateDomainStatus(client *mongo.Client, domainID, status string, proxied bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -364,9 +417,6 @@ func UpdateDomainStatus(client *mongo.Client, domainID, status string, proxied b
 	_, err := collection.UpdateOne(ctx, filter, update)
 	return err
 }
-
-
-
 
 // ---------------------------------------------------------
 // HELPERS
