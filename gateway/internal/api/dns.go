@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings" // <--- ADD THIS IMPORT
 
 	"web-app-firewall-ml-detection/internal/database"
 )
@@ -37,6 +38,11 @@ func (h *APIHandler) addRecord(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
+	}
+
+	// [NEW] Sanitize Content: Remove trailing dots for CNAME, MX, NS
+	if req.Type == "CNAME" || req.Type == "MX" || req.Type == "NS" {
+		req.Content = strings.TrimSuffix(req.Content, ".")
 	}
 
 	// 1.Validate required fields
@@ -82,12 +88,12 @@ func (h *APIHandler) addRecord(w http.ResponseWriter, r *http.Request) {
 		req.TTL = 300
 	}
 
-	// 8.Add to MongoDB (Source of Truth for User Display)
+	// 8.Add to MongoDB (Source of Truth for User Display & Proxy Routing)
 	newRecord := database.DNSRecord{
 		DomainID: req.DomainID,
 		Name:     recordName,
 		Type:     req.Type,
-		Content:  req.Content, // Store the ORIGIN IP / TARGET
+		Content:  req.Content, // Store the ORIGIN IP / CNAME Target
 		TTL:      req.TTL,
 		Proxied:  req.Proxied,
 	}
@@ -100,10 +106,10 @@ func (h *APIHandler) addRecord(w http.ResponseWriter, r *http.Request) {
 	newRecord.ID = recordID
 
 	// 9.Add to PowerDNS (Resolution Backend)
-	// This function handles the proxy logic: if proxied=true and type=A, it sets content=WAF_IP
+	// If proxied=true, this will automatically insert an A record pointing to wafIP
 	err = database.AddPowerDNSRecord(recordName, req.Type, req.Content, req.Proxied, wafIP)
 	if err != nil {
-		// In a real system, you might want to rollback the MongoDB insert here.
+		// Log error but generally keep the mongo record so user can try deleting/re-adding
 		http.Error(w, "DNS Propagation Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -112,7 +118,7 @@ func (h *APIHandler) addRecord(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "success",
 		"message": "DNS record added successfully",
-		"record":  newRecord, // Returns the user's view (Origin IP)
+		"record":  newRecord,
 	})
 }
 
@@ -138,7 +144,6 @@ func (h *APIHandler) listRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2.Get records from MongoDB (Clean User View)
-	// This ensures the user sees their configured IP, not the WAF IP
 	records, err := database.GetDNSRecords(h.MongoClient, domainID)
 	if err != nil {
 		http.Error(w, "Failed to fetch records: "+err.Error(), http.StatusInternalServerError)
@@ -172,7 +177,7 @@ func (h *APIHandler) deleteRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Fetch the record details from MongoDB first (to know what to delete from SQL)
+	// 2. Fetch the record details from MongoDB first
 	record, err := database.GetDNSRecordByID(h.MongoClient, recordID)
 	if err != nil {
 		http.Error(w, "Record not found", http.StatusNotFound)
@@ -180,9 +185,12 @@ func (h *APIHandler) deleteRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Determine the content stored in SQL to delete it correctly
-	// If it was proxied, SQL has the WAF IP. If not, it has the Origin IP.
+	// If proxied, the SQL backend holds an A record with WAF IP.
+	sqlType := record.Type
 	sqlContent := record.Content
-	if record.Proxied && record.Type == "A" {
+
+	if record.Proxied {
+		sqlType = "A"
 		wafIP := os.Getenv("WAF_PUBLIC_IP")
 		if wafIP == "" {
 			wafIP = "139.59.76.127"
@@ -190,8 +198,8 @@ func (h *APIHandler) deleteRecord(w http.ResponseWriter, r *http.Request) {
 		sqlContent = wafIP
 	}
 
-	// 4. Delete from PowerDNS (MySQL) by matching Name, Type, and Content
-	err = database.DeletePowerDNSRecordByContent(record.Name, record.Type, sqlContent)
+	// 4. Delete from PowerDNS (MySQL)
+	err = database.DeletePowerDNSRecordByContent(record.Name, sqlType, sqlContent)
 	if err != nil {
 		http.Error(w, "Failed to delete from DNS backend: "+err.Error(), http.StatusInternalServerError)
 		return

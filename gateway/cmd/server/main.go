@@ -29,19 +29,13 @@ func getEnv(key, fallback string) string {
 }
 
 // CORSMiddleware handles Preflight and Headers
-// CORSMiddleware handles Preflight and Headers for multiple origins
 func CORSMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        // 1. Get the allowed origins from Env and split them into a slice
         envOrigins := getEnv("FRONTEND_URL", "https://www.minishield.tech")
         allowedOrigins := strings.Split(envOrigins, ",")
-
-        // 2. Get the origin of the incoming request
         requestOrigin := r.Header.Get("Origin")
 
-        // 3. Check if the request origin is in our allowed list
         for _, origin := range allowedOrigins {
-            // TrimSpace is important in case env var looks like "url1, url2"
             if strings.TrimSpace(origin) == requestOrigin {
                 w.Header().Set("Access-Control-Allow-Origin", requestOrigin)
                 break
@@ -108,25 +102,27 @@ func main() {
 		incomingHost := req.Host
 		var targetURL *url.URL
 
-		// A. Look up origin IP from MongoDB
-		originIP, err := database.GetRoutingByHost(client, incomingHost)
+		// [FIX] A. Look up origin IP from the user's DNS Records (New Collection)
+		originIP, err := database.GetOriginIP(client, incomingHost)
 
 		if err == nil && originIP != "" {
 			rawTarget := originIP
+			// Basic heuristic to add scheme if missing
 			if len(rawTarget) < 4 || rawTarget[:4] != "http" {
 				rawTarget = "http://" + rawTarget
 			}
 			targetURL, _ = url.Parse(rawTarget)
 			log.Printf("[Proxy] Routing %s -> %s", incomingHost, rawTarget)
 		} else {
+			// Fallback if no user record exists (e.g. before they add an A record)
 			targetURL, _ = url.Parse(defaultOrigin)
-			log.Printf("[Proxy] No routing found for %s, using default: %s", incomingHost, defaultOrigin)
+			log.Printf("[Proxy] No user record found for %s, using default: %s", incomingHost, defaultOrigin)
 		}
 
 		req.URL.Scheme = targetURL.Scheme
 		req.URL.Host = targetURL.Host
 		req.Header.Set("X-Forwarded-Host", incomingHost)
-		req.Header.Set("X-Forwarded-Proto", "https") // Signal that we are secure
+		req.Header.Set("X-Forwarded-Proto", "https")
 		req.Header.Set("X-Real-IP", req.RemoteAddr)
 	}
 
@@ -136,7 +132,6 @@ func main() {
         ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
             log.Printf("🔥 Proxy Error for %s: %v", r.Host, err)
             
-            // Fix: Check r.Context().Err() to see if the client disconnected
             if r.Context().Err() != nil {
                 return 
             }
@@ -180,12 +175,9 @@ func main() {
 			return nil
 		}
 
-		// 2. Allow User Domains (Check if Domain EXISTS, don't worry about routing yet)
-		// We use GetDomainByName instead of GetRoutingByHost to allow SSL for
-		// domains that are added but not yet fully configured/routed.
+		// 2. Allow User Domains
 		foundDomain, err := database.GetDomainByName(client, host)
 		if err != nil || foundDomain == nil {
-			// Domain not found in our DB -> Reject Certificate Generation
 			return fmt.Errorf("host %s not allowed", host)
 		}
 
@@ -211,7 +203,6 @@ func main() {
 	// 9. START SERVERS
 	// ---------------------------------------------------------
 
-	// HTTP Server (Port 80) -> Redirects to HTTPS & Solves Challenges
 	go func() {
 		log.Println("✅ Starting HTTP Server on :80 (ACME Challenge + Redirect)")
 		if err := http.ListenAndServe(":80", certManager.HTTPHandler(nil)); err != nil {
@@ -219,7 +210,6 @@ func main() {
 		}
 	}()
 
-	// HTTPS Server (Port 443)
 	log.Println("🔒 Starting HTTPS WAF on :443")
 	if err := httpsServer.ListenAndServeTLS("", ""); err != nil {
 		log.Fatalf("HTTPS Server Failed: %v", err)

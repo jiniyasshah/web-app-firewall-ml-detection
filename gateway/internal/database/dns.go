@@ -47,17 +47,15 @@ func CloseDNS() {
 }
 
 // AddPowerDNSRecord inserts a new DNS record into PowerDNS (Resolution Backend)
-// If 'proxied' is true and record is 'A', the content is replaced with WAF IP.
+// CRITICAL FIX: If 'proxied' is true, we ALWAYS create an 'A' record pointing to WAF IP,
+// regardless of whether the user gave us a CNAME or A record.
 func AddPowerDNSRecord(name, recordType, content string, proxied bool, wafIP string) error {
-	// Check if database is connected
 	if dnsDB == nil {
 		return fmt.Errorf("DNS database not connected")
 	}
 
 	// First, get the domain_id for the zone
 	var domainID int
-
-	// Extract zone from record name (e.g., "www.example.com" -> "example.com")
 	zoneName := extractZone(name)
 
 	err := dnsDB.QueryRow("SELECT id FROM domains WHERE name = ?", zoneName).Scan(&domainID)
@@ -65,17 +63,22 @@ func AddPowerDNSRecord(name, recordType, content string, proxied bool, wafIP str
 		return fmt.Errorf("zone not found: %s (error: %v)", zoneName, err)
 	}
 
-	// If proxied, point to WAF IP; otherwise, point to user's content
-	actualContent := content
-	if proxied && recordType == "A" {
-		actualContent = wafIP
+	// --- LOGIC FOR PROXYING ---
+	// If Proxied: Public DNS sees Type=A, Content=WAF_IP
+	// If Not Proxied: Public DNS sees Type=UserType, Content=UserContent
+	finalType := recordType
+	finalContent := content
+
+	if proxied {
+		finalType = "A"
+		finalContent = wafIP
 	}
 
 	// Insert the record
 	_, err = dnsDB.Exec(`
 		INSERT INTO records (domain_id, name, type, content, ttl, disabled)
 		VALUES (?, ?, ?, ?, 300, 0)
-	`, domainID, name, recordType, actualContent)
+	`, domainID, name, finalType, finalContent)
 
 	return err
 }
@@ -122,14 +125,11 @@ func GetPowerDNSRecords(domainName string) ([]map[string]interface{}, error) {
 }
 
 // DeletePowerDNSRecordByContent removes a record matching name, type, and content.
-// Used when syncing deletions from MongoDB where we don't know the MySQL ID.
 func DeletePowerDNSRecordByContent(name, recordType, content string) error {
 	if dnsDB == nil {
 		return fmt.Errorf("DNS database not connected")
 	}
 
-	// We match name, type, and content to ensure we don't delete wrong records
-	// (e.g. if multiple A records exist for round-robin)
 	_, err := dnsDB.Exec(`
 		DELETE FROM records 
 		WHERE name = ? AND type = ? AND content = ?
@@ -140,9 +140,6 @@ func DeletePowerDNSRecordByContent(name, recordType, content string) error {
 
 // Helper function to extract zone from full record
 func extractZone(recordName string) string {
-	// Simple implementation:  find the last two parts
-	// "www.api.example.com" -> "example.com"
-	// "example.com" -> "example.com"
 	parts := splitDomain(recordName)
 	if len(parts) >= 2 {
 		return parts[len(parts)-2] + "." + parts[len(parts)-1]
@@ -175,15 +172,12 @@ func CreateDNSZone(domainName string, nameservers []string) error {
 		return fmt.Errorf("DNS database not connected")
 	}
 
-	// Check if zone already exists
 	var existingID int
 	err := dnsDB.QueryRow("SELECT id FROM domains WHERE name = ?", domainName).Scan(&existingID)
 	if err == nil {
-		// Zone already exists, that's fine
 		return nil
 	}
 
-	// Create the zone
 	result, err := dnsDB.Exec(`
 		INSERT INTO domains (name, type) VALUES (?, 'NATIVE')
 	`, domainName)
@@ -196,7 +190,6 @@ func CreateDNSZone(domainName string, nameservers []string) error {
 		return fmt.Errorf("failed to get zone ID: %v", err)
 	}
 
-	// Add SOA record (required for every zone)
 	soaContent := fmt.Sprintf("%s hostmaster.%s 1 10800 3600 604800 3600",
 		nameservers[0], domainName)
 	
@@ -208,7 +201,6 @@ func CreateDNSZone(domainName string, nameservers []string) error {
 		return fmt.Errorf("failed to create SOA record: %v", err)
 	}
 
-	// Add NS records
 	for _, ns := range nameservers {
 		_, err = dnsDB.Exec(`
 			INSERT INTO records (domain_id, name, type, content, ttl, disabled)
@@ -228,20 +220,17 @@ func DeleteDNSZone(domainName string) error {
 		return fmt.Errorf("DNS database not connected")
 	}
 
-	// Get domain ID
 	var domainID int
 	err := dnsDB.QueryRow("SELECT id FROM domains WHERE name = ?", domainName).Scan(&domainID)
 	if err != nil {
 		return fmt.Errorf("zone not found: %v", err)
 	}
 
-	// Delete all records for this zone
 	_, err = dnsDB.Exec("DELETE FROM records WHERE domain_id = ?", domainID)
 	if err != nil {
 		return fmt.Errorf("failed to delete records:  %v", err)
 	}
 
-	// Delete the zone
 	_, err = dnsDB.Exec("DELETE FROM domains WHERE id = ?", domainID)
 	if err != nil {
 		return fmt.Errorf("failed to delete zone: %v", err)

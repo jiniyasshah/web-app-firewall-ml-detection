@@ -439,3 +439,33 @@ func compileRegexes(rules []detector.WAFRule) []detector.WAFRule {
 	}
 	return rules
 }
+
+// [NEW] GetOriginIP resolves the backend IP for the Proxy from the user's DNS records
+func GetOriginIP(client *mongo.Client, host string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Fast timeout for proxy
+	defer cancel()
+
+	var record DNSRecord
+
+	// 1. Try to find an exact 'A' record match first
+	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
+		"name": host,
+		"type": "A",
+	}).Decode(&record)
+
+	if err == nil {
+		return record.Content, nil
+	}
+
+	// 2. If no A record, try to find a 'CNAME' record
+	err = client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
+		"name": host,
+		"type": "CNAME",
+	}).Decode(&record)
+
+	if err == nil {
+		return record.Content, nil
+	}
+
+	return "", err
+}
