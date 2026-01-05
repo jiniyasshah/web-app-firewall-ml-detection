@@ -79,7 +79,6 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	domain.UserID = userID
 	domain.Nameservers = []string{ns1, ns2}
 	domain.Status = "pending_verification"
-	domain.Proxied = false
 
 	// 3. Save to MongoDB
 	createdDomain, err := database.CreateDomain(h.MongoClient, domain)
@@ -206,7 +205,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if verified {
-		err := database.UpdateDomainStatus(h.MongoClient, domain.ID, "active", true)
+		err := database.UpdateDomainStatus(h.MongoClient, domain.ID, "active")
 		if err != nil {
 			http.Error(w, "DB Update failed", http.StatusInternalServerError)
 			return

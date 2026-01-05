@@ -25,8 +25,7 @@ type Domain struct {
 	UserID      string    `bson:"user_id" json:"user_id"`
 	Name        string    `bson:"name" json:"name"`           // e.g. "myapp.com"
 	Nameservers []string  `bson:"nameservers" json:"nameservers"`
-	Status      string    `bson:"status" json:"status"`       // "pending_verification", "active"
-	Proxied     bool      `bson:"proxied" json:"proxied"`     // Is WAF enabled for this domain?
+	Status      string    `bson:"status" json:"status"`       // "pending_verification", "active"     // Is WAF enabled for this domain?
 	CreatedAt   time.Time `bson:"created_at" json:"created_at"`
 }
 

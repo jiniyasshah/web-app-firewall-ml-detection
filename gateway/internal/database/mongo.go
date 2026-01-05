@@ -440,7 +440,7 @@ func GetAllPolicies(client *mongo.Client) ([]detector.RulePolicy, error) {
 }
 
 // UpdateDomainStatus activates the domain after verification
-func UpdateDomainStatus(client *mongo.Client, domainID, status string, proxied bool) error {
+func UpdateDomainStatus(client *mongo.Client, domainID, status string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -450,7 +450,6 @@ func UpdateDomainStatus(client *mongo.Client, domainID, status string, proxied b
 	update := bson.M{
 		"$set": bson.M{
 			"status": status,
-			"proxied": proxied,
 			"updated_at": time.Now(),
 		},
 	}
