@@ -18,27 +18,27 @@ var JWTSecret = []byte("super_secret_waf_key_change_me")
 
 func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	// Use UserInput for decoding the request
 	var input detector.UserInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, "Invalid JSON Body", http.StatusBadRequest)
+		h.WriteJSONError(w, "Invalid JSON Body", http.StatusBadRequest)
 		return
 	}
 
 	// Basic Validation
 	if input.Email == "" || input.Password == "" || input.Name == "" {
-		http.Error(w, "Name, Email and Password are required", http.StatusBadRequest)
+		h.WriteJSONError(w, "Name, Email and Password are required", http.StatusBadRequest)
 		return
 	}
 
 	// Hash Password
 	hashed, err := bcrypt.GenerateFromPassword([]byte(input.Password), 10)
 	if err != nil {
-		http.Error(w, "Server Error", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -51,7 +51,7 @@ func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	// Save to DB
 	if err := database.CreateUser(h.MongoClient, user); err != nil {
-		http.Error(w, "Registration failed:  "+err.Error(), http.StatusBadRequest)
+		h.WriteJSONError(w, "Registration failed:  "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -61,25 +61,25 @@ func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	// Use UserInput instead of User
 	var input detector.UserInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, "Invalid JSON Body", http.StatusBadRequest)
+		h.WriteJSONError(w, "Invalid JSON Body", http.StatusBadRequest)
 		return
 	}
 
 	user, err := database.GetUserByEmail(h.MongoClient, input.Email)
 	if err != nil {
-		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		h.WriteJSONError(w, "Invalid email or password", http.StatusUnauthorized)
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
-		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		h.WriteJSONError(w, "Invalid email or password", http.StatusUnauthorized)
 		return
 	}
 
@@ -93,7 +93,7 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	tokenString, err := token.SignedString(JWTSecret)
 	if err != nil {
-		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to generate token", http.StatusInternalServerError)
 		return
 	}
 
@@ -135,7 +135,7 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) CheckAuth(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value("user_id").(string)
 	if !ok {
-		http.Error(w, "Server Error", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Server Error", http.StatusInternalServerError)
 		return
 	}
 
@@ -156,12 +156,17 @@ func (h *APIHandler) CheckAuth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// AuthMiddleware remains mostly the same, ensuring Cookie security
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("auth_token")
 		if err != nil {
-			http.Error(w, "Unauthorized: No session cookie", http.StatusUnauthorized)
+			// MANUAL JSON ERROR RESPONSE
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "error",
+				"message": "Unauthorized: No session cookie",
+			})
 			return
 		}
 
@@ -170,19 +175,37 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		})
 
 		if err != nil || !token.Valid {
-			http.Error(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
+			// MANUAL JSON ERROR RESPONSE
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "error",
+				"message": "Unauthorized: Invalid token",
+			})
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			http.Error(w, "Unauthorized: Invalid claims", http.StatusUnauthorized)
+			// MANUAL JSON ERROR RESPONSE
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "error",
+				"message": "Unauthorized: Invalid claims",
+			})
 			return
 		}
 
 		userID, ok := claims["user_id"].(string)
 		if !ok {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			// MANUAL JSON ERROR RESPONSE
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "error",
+				"message": "Unauthorized",
+			})
 			return
 		}
 

@@ -15,7 +15,7 @@ func (h *APIHandler) SecuredLogsHandler(w http.ResponseWriter, r *http.Request) 
 	// Fetch logs ONLY for domains owned by this user
 	logs, err := database.GetLogsForUser(h.MongoClient, userID, 50)
 	if err != nil {
-		http.Error(w, "Failed to fetch logs", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to fetch logs", http.StatusInternalServerError)
 		return
 	}
 	json.NewEncoder(w).Encode(logs)

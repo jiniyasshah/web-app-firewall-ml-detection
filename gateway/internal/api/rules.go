@@ -44,14 +44,14 @@ func (h *APIHandler) GetGlobalRules(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		http.Error(w, "Failed to fetch rules", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to fetch rules", http.StatusInternalServerError)
 		return
 	}
 
 	// 2.Fetch only THIS user's policies
 	policies, err := database.GetPoliciesByUser(h.MongoClient, userID)
 	if err != nil {
-		http.Error(w, "Failed to fetch policies", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to fetch policies", http.StatusInternalServerError)
 		return
 	}
 
@@ -79,14 +79,14 @@ func (h *APIHandler) GetCustomRules(w http.ResponseWriter, r *http.Request) {
 	// 1.Fetch only Custom Rules owned by this user
 	rules, err := database.GetRules(h.MongoClient, bson.M{"owner_id": userID})
 	if err != nil {
-		http.Error(w, "Failed to fetch rules", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to fetch rules", http.StatusInternalServerError)
 		return
 	}
 
 	// 2.Fetch policies
 	policies, err := database.GetPoliciesByUser(h.MongoClient, userID)
 	if err != nil {
-		http.Error(w, "Failed to fetch policies", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to fetch policies", http.StatusInternalServerError)
 		return
 	}
 
@@ -108,7 +108,7 @@ func (h *APIHandler) GetCustomRules(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) AddCustomRule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -116,7 +116,7 @@ func (h *APIHandler) AddCustomRule(w http.ResponseWriter, r *http.Request) {
 
 	var rule detector.WAFRule
 	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		h.WriteJSONError(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
@@ -129,7 +129,7 @@ func (h *APIHandler) AddCustomRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := database.AddRule(h.MongoClient, rule); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.WriteJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -140,7 +140,7 @@ func (h *APIHandler) AddCustomRule(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) DeleteCustomRule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -148,12 +148,12 @@ func (h *APIHandler) DeleteCustomRule(w http.ResponseWriter, r *http.Request) {
 	ruleID := r.URL.Query().Get("id")
 
 	if ruleID == "" {
-		http.Error(w, "Missing Rule ID", http.StatusBadRequest)
+		h.WriteJSONError(w, "Missing Rule ID", http.StatusBadRequest)
 		return
 	}
 
 	if err := database.DeleteRule(h.MongoClient, ruleID, userID); err != nil {
-		http.Error(w, "Cannot delete rule: "+err.Error(), http.StatusForbidden)
+		h.WriteJSONError(w, "Cannot delete rule: "+err.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -166,7 +166,7 @@ func (h *APIHandler) DeleteCustomRule(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) ToggleRule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -179,12 +179,12 @@ func (h *APIHandler) ToggleRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		h.WriteJSONError(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
 	if payload.ID == "" {
-		http.Error(w, "Missing 'id'", http.StatusBadRequest)
+		h.WriteJSONError(w, "Missing 'id'", http.StatusBadRequest)
 		return
 	}
 
@@ -197,7 +197,7 @@ func (h *APIHandler) ToggleRule(w http.ResponseWriter, r *http.Request) {
 
 	if err := database.UpsertRulePolicy(h.MongoClient, policy); err != nil {
 		log.Printf("[ERROR] Failed to save policy: %v", err)
-		http.Error(w, "Failed to update policy", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to update policy", http.StatusInternalServerError)
 		return
 	}
 

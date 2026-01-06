@@ -39,7 +39,7 @@ func getRootDomain(domain string) string {
 
 func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -47,7 +47,7 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 
 	var domain detector.Domain
 	if err := json.NewDecoder(r.Body).Decode(&domain); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		h.WriteJSONError(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
@@ -84,10 +84,10 @@ func (h *APIHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	createdDomain, err := database.CreateDomain(h.MongoClient, domain)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
-			http.Error(w, "Domain already exists", http.StatusConflict)
+			h.WriteJSONError(w, "Domain already exists", http.StatusConflict)
 			return
 		}
-		http.Error(w, "Failed to create domain in DB", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to create domain in DB", http.StatusInternalServerError)
 		return
 	}
 
@@ -150,25 +150,25 @@ func checkRegistrarRDAP(domain string) ([]string, error) {
 
 func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	domainID := r.URL.Query().Get("id")
 	if domainID == "" {
-		http.Error(w, "Missing domain id", http.StatusBadRequest)
+		h.WriteJSONError(w, "Missing domain id", http.StatusBadRequest)
 		return
 	}
 
 	domain, err := database.GetDomainByID(h.MongoClient, domainID)
 	if err != nil {
-		http.Error(w, "Domain not found", http.StatusNotFound)
+		h.WriteJSONError(w, "Domain not found", http.StatusNotFound)
 		return
 	}
 
 	userID := r.Context().Value("user_id").(string)
 	if domain.UserID != userID {
-		http.Error(w, "Unauthorized", http.StatusForbidden)
+		h.WriteJSONError(w, "Unauthorized", http.StatusForbidden)
 		return
 	}
 
@@ -207,7 +207,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 	if verified {
 		err := database.UpdateDomainStatus(h.MongoClient, domain.ID, "active")
 		if err != nil {
-			http.Error(w, "DB Update failed", http.StatusInternalServerError)
+			h.WriteJSONError(w, "DB Update failed", http.StatusInternalServerError)
 			return
 		}
 
@@ -230,7 +230,7 @@ func (h *APIHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id").(string)
 	domains, err := database.GetDomainsByUser(h.MongoClient, userID)
 	if err != nil {
-		http.Error(w, "Failed to fetch domains", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to fetch domains", http.StatusInternalServerError)
 		return
 	}
 	json.NewEncoder(w).Encode(domains)

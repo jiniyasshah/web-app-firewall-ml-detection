@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"log"
+	"net/http"
 	"net/http/httputil"
 	"sync"
 	"sync/atomic"
@@ -151,4 +153,15 @@ func (h *APIHandler) startStatsTicker() {
 		count := atomic.SwapUint64(&h.reqCount, 0)
 		atomic.StoreUint64(&h.rpm, count)
 	}
+}
+
+// WriteJSONError is a utility to return standardized JSON errors
+func (h *APIHandler) WriteJSONError(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "error",
+		"message": message,
+	})
 }
