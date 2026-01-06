@@ -1,9 +1,12 @@
+// type: uploaded file
+// fileName: jiniyasshah/web-app-firewall-ml-detection/web-app-firewall-ml-detection-test/gateway/internal/api/logs.go
 package api
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"web-app-firewall-ml-detection/internal/database"
 	"web-app-firewall-ml-detection/internal/logger"
@@ -12,13 +15,35 @@ import (
 func (h *APIHandler) SecuredLogsHandler(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id").(string)
 
-	// Fetch logs ONLY for domains owned by this user
-	logs, err := database.GetLogsForUser(h.MongoClient, userID, 50)
+	// 1. Parse Query Params
+	query := r.URL.Query()
+	domainID := query.Get("domain_id")
+	
+	pageStr := query.Get("page")
+	page, _ := strconv.ParseInt(pageStr, 10, 64)
+	if page < 1 { page = 1 }
+
+	limitStr := query.Get("limit")
+	limit, _ := strconv.ParseInt(limitStr, 10, 64)
+	if limit < 1 { limit = 20 }
+
+	// 2. Fetch Logs via Database Helper
+	filter := database.LogFilter{
+		UserID:   userID,
+		DomainID: domainID,
+		Page:     page,
+		Limit:    limit,
+	}
+
+	result, err := database.GetLogs(h.MongoClient, filter)
 	if err != nil {
-		h.WriteJSONError(w, "Failed to fetch logs", http.StatusInternalServerError)
+		h.WriteJSONError(w, "Failed to fetch logs: " + err.Error(), http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(logs)
+
+	// 3. Return Standardized JSON
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 func (h *APIHandler) SSEHandler(w http.ResponseWriter, r *http.Request) {

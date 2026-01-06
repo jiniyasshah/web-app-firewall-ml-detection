@@ -1,3 +1,5 @@
+// type: uploaded file
+// fileName: jiniyasshah/web-app-firewall-ml-detection/web-app-firewall-ml-detection-test/gateway/internal/logger/logger.go
 package logger
 
 import (
@@ -19,6 +21,9 @@ type FullRequest struct {
 }
 
 type AttackLog struct {
+	ID             interface{} `bson:"_id,omitempty" json:"id"` // Added ID field
+	UserID         string      `bson:"user_id" json:"user_id"`     // [NEW]
+	DomainID       string      `bson:"domain_id" json:"domain_id"` // [NEW]
 	Timestamp      time.Time   `bson:"timestamp" json:"timestamp"`
 	IP             string      `bson:"ip" json:"ip"`
 	RequestPath    string      `bson:"request_path" json:"request_path"`
@@ -36,24 +41,21 @@ type AttackLog struct {
 
 var logCollection *mongo.Collection
 
-// [NEW] Channel for Real-Time SSE Broadcasting
+// Channel for Real-Time SSE Broadcasting
 var broadcast = make(chan AttackLog, 100)
 
 func Init(client *mongo.Client, dbName string) {
 	logCollection = client.Database(dbName).Collection("logs")
 }
 
-// [NEW] Helper for main.go to access the channel
 func GetBroadcastChannel() chan AttackLog {
 	return broadcast
 }
 
-// [NEW] Helper to Fetch Historical Logs from DB
 func GetRecentLogs(limit int64) ([]AttackLog, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Sort by Timestamp Descending (Newest first)
 	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: -1}}).SetLimit(limit)
 
 	cursor, err := logCollection.Find(ctx, bson.M{}, opts)
@@ -69,8 +71,11 @@ func GetRecentLogs(limit int64) ([]AttackLog, error) {
 	return logs, nil
 }
 
-func LogAttack(ip, path, reason, action, source string, tags []string, score int, confidence float64, fullReq FullRequest, trigger string) {
+// [UPDATED] Signature now includes userID and domainID
+func LogAttack(userID, domainID, ip, path, reason, action, source string, tags []string, score int, confidence float64, fullReq FullRequest, trigger string) {
 	entry := AttackLog{
+		UserID:         userID,   // [NEW]
+		DomainID:       domainID, // [NEW]
 		Timestamp:      time.Now(),
 		IP:             ip,
 		RequestPath:    path,
@@ -92,10 +97,9 @@ func LogAttack(ip, path, reason, action, source string, tags []string, score int
 		}
 	}()
 
-	// 2.Broadcast to Live Dashboard (Non-blocking)
+	// 2.Broadcast to Live Dashboard
 	select {
 	case broadcast <- entry:
 	default:
-		// Drop if channel full to prevent blocking WAF
 	}
 }

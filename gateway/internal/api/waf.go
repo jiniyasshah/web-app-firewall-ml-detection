@@ -1,3 +1,5 @@
+// type: uploaded file
+// fileName: jiniyasshah/web-app-firewall-ml-detection/web-app-firewall-ml-detection-test/gateway/internal/api/waf.go
 package api
 
 import (
@@ -13,7 +15,7 @@ import (
 	"web-app-firewall-ml-detection/internal/logger"
 )
 
-// Helper to extract IP from X-Forwarded-For or RemoteAddr
+// Helper to extract IP
 func getRealIP(r *http.Request) string {
 	xff := r.Header.Get("X-Forwarded-For")
 	if xff != "" {
@@ -31,63 +33,57 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 	atomic.AddUint64(&h.reqCount, 1)
 
 	clientIP := getRealIP(r)
-
-	// Buffer Body for Analysis & Forwarding
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	// Determine Rules for this Host
-	// Strip port if present (e.g."example.com:8080" -> "example.com")
 	host := r.Host
 	if strings.Contains(host, ":") {
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+		if hostname, _, err := net.SplitHostPort(host); err == nil {
+			host = hostname
 		}
 	}
 
+	// [UPDATED] Lookup Rules AND Domain Metadata (UserID/DomainID)
 	h.rulesMutex.RLock()
-	currentRules, exists := h.domainRules[host]
+	currentRules, rulesExist := h.domainRules[host]
+	domainInfo, domainExists := h.domainMap[host] // Use the new cache
 	h.rulesMutex.RUnlock()
 
-	// ---------------------------------------------------------
-	// 1. UNCONFIGURED DOMAIN CHECK (Prevents Domain Fronting)
-	// ---------------------------------------------------------
-	if !exists {
-		// Log the attempt
+	// 1. UNCONFIGURED DOMAIN CHECK
+	if !rulesExist || !domainExists {
 		log.Printf("⚠️ Unknown Domain Accessed: %s from %s. Returning Custom 404.", host, clientIP)
-		
-		// Return the pre-loaded custom HTML page
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusNotFound)
 		if len(h.UnconfiguredPage) > 0 {
 			w.Write(h.UnconfiguredPage)
 		} else {
-			// Fallback if file load failed
 			w.Write([]byte("Domain not configured"))
 		}
 		return
 	}
 
+	// Extract IDs for Logging
+	userID := domainInfo.UserID
+	domainID := domainInfo.ID
+
 	// Rate Limiting
 	limitReached := h.RateLimiter.IsRateLimited(clientIP)
 
-	// 1.Rule Engine Check
+	// 1. Rule Engine Check
 	ruleScore, triggeredTags, ruleBlock, rulePayload := detector.CheckRequest(r, currentRules, limitReached)
 
 	var isAnomaly bool
 	var confidence float64
 	var mlTag, mlTrigger string
 
-	// 2.ML Engine Check (Only if not already blocked and score is low)
+	// 2. ML Engine Check
 	if !ruleBlock && ruleScore < 15 {
-		// FIX APPLIED: Passing bodyBytes correctly
 		isAnomaly, confidence, mlTag, mlTrigger = detector.CheckML(r, bodyBytes, h.MLURL)
 	}
 
-	// 3.Final Decision
+	// 3. Final Decision
 	verdict, reason, source := detector.Decide(ruleScore, ruleBlock, isAnomaly, confidence)
 
-	// Merge ML tags if relevant
 	if mlTag != "" && mlTag != "Normal" && (isAnomaly || confidence > 0.60) {
 		triggeredTags = append(triggeredTags, mlTag)
 	}
@@ -97,7 +93,7 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 		finalTrigger = mlTrigger
 	}
 
-	// 4.Logging & Action
+	// 4. Logging & Action
 	fullReq := logger.FullRequest{
 		Method:  r.Method,
 		URL:     r.URL.String(),
@@ -105,16 +101,17 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 		Body:    string(bodyBytes),
 	}
 
+	// [UPDATED] LogAttack call now includes userID and domainID
 	switch verdict {
 	case detector.Block:
-		log.Printf("⛔ BLOCKED IP: %s | Host: %s | Source: %s | Reason: %s", clientIP, host, source, reason)
-		logger.LogAttack(clientIP, r.URL.Path, reason, "Blocked", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
+		log.Printf("⛔ BLOCKED IP: %s | Host: %s | Reason: %s", clientIP, host, reason)
+		logger.LogAttack(userID, domainID, clientIP, r.URL.Path, reason, "Blocked", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("WAF Blocked: " + reason))
 
 	case detector.Monitor:
-		log.Printf("⚠️ FLAGGED IP: %s | Host: %s | Source: %s", clientIP, host, source)
-		logger.LogAttack(clientIP, r.URL.Path, reason, "Flagged", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
+		log.Printf("⚠️ FLAGGED IP: %s | Host: %s", clientIP, host)
+		logger.LogAttack(userID, domainID, clientIP, r.URL.Path, reason, "Flagged", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
 		h.Proxy.ServeHTTP(w, r)
 
 	case detector.Allow:

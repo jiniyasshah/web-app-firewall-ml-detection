@@ -11,11 +11,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-type policyKey struct {
-	RuleID   string
-	DomainID string
-}
-
 // Helper to determine if a rule is enabled based on user policies
 func resolveEnabledStatus(ruleID, domainID string, policies map[policyKey]bool, defaultState bool) bool {
 	// 1.Check Specific Domain Policy
