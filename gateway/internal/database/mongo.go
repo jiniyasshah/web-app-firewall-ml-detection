@@ -1,9 +1,12 @@
+// type: uploaded file
+// fileName: jiniyasshah/web-app-firewall-ml-detection/web-app-firewall-ml-detection-test/gateway/internal/database/mongo.go
 package database
 
 import (
 	"context"
 	"errors"
 	"log"
+	"math/rand" // [NEW] Needed for Round Robin Load Balancing
 	"regexp"
 	"time"
 
@@ -278,23 +281,36 @@ func UpdateDNSRecordProxy(client *mongo.Client, recordID string, proxied bool) e
 }
 
 // GetOriginIP resolves the backend IP for the Proxy from the user's DNS records
+// UPDATED: Now supports Round-Robin Load Balancing if multiple A records exist.
 func GetOriginIP(client *mongo.Client, host string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Fast timeout for proxy
 	defer cancel()
 
-	var record DNSRecord
-
-	// 1. Try to find an exact 'A' record match first
-	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
+	// 1. Try to find 'A' records (Matches ALL records now)
+	cursor, err := client.Database(DBName).Collection("dns_records").Find(ctx, bson.M{
 		"name": host,
 		"type": "A",
-	}).Decode(&record)
+	})
 
 	if err == nil {
-		return record.Content, nil
+		// Read all matching A records
+		var records []DNSRecord
+		if err := cursor.All(ctx, &records); err == nil && len(records) > 0 {
+			// [LOAD BALANCING LOGIC]
+			// If we found multiple records, pick one at random.
+			// This enables simple Round-Robin distribution for the WAF.
+			if len(records) == 1 {
+				return records[0].Content, nil
+			}
+			// Pick a random index
+			randomIndex := rand.Intn(len(records))
+			return records[randomIndex].Content, nil
+		}
 	}
 
 	// 2. If no A record, try to find a 'CNAME' record
+	// CNAMEs are strictly unique (Rule 1.2), so FindOne is safe here.
+	var record DNSRecord
 	err = client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
 		"name": host,
 		"type": "CNAME",
