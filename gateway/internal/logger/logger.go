@@ -21,7 +21,7 @@ type FullRequest struct {
 }
 
 type AttackLog struct {
-	ID             interface{} `bson:"_id,omitempty" json:"id"` // Added ID field
+	ID             interface{} `bson:"_id,omitempty" json:"_id"` // Added ID field
 	UserID         string      `bson:"user_id" json:"user_id"`     // [NEW]
 	DomainID       string      `bson:"domain_id" json:"domain_id"` // [NEW]
 	Timestamp      time.Time   `bson:"timestamp" json:"timestamp"`
