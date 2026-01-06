@@ -71,11 +71,11 @@ func GetRecentLogs(limit int64) ([]AttackLog, error) {
 	return logs, nil
 }
 
-// [UPDATED] Signature now includes userID and domainID
+// [UPDATED] LogAttack now inserts to DB first to get the ID, then broadcasts
 func LogAttack(userID, domainID, ip, path, reason, action, source string, tags []string, score int, confidence float64, fullReq FullRequest, trigger string) {
 	entry := AttackLog{
-		UserID:         userID,   // [NEW]
-		DomainID:       domainID, // [NEW]
+		UserID:         userID,
+		DomainID:       domainID,
 		Timestamp:      time.Now(),
 		IP:             ip,
 		RequestPath:    path,
@@ -89,17 +89,26 @@ func LogAttack(userID, domainID, ip, path, reason, action, source string, tags [
 		TriggerPayload: trigger,
 	}
 
-	// 1.Save to DB (Async)
+	// Run entire logging flow asynchronously to prevent blocking the WAF request
 	go func() {
-		_, err := logCollection.InsertOne(context.Background(), entry)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// 1. Save to DB first
+		res, err := logCollection.InsertOne(ctx, entry)
 		if err != nil {
 			log.Printf("Failed to log attack to DB: %v", err)
+			// Proceeding to broadcast anyway so admins see the alert, even if DB failed
+		} else {
+			// 2. IMPORTANT: Update the entry with the generated MongoDB ID
+			entry.ID = res.InsertedID
+		}
+
+		// 3. Broadcast the fully populated entry (now with ID) to Live Dashboard
+		select {
+		case broadcast <- entry:
+		default:
+			// Channel is full, drop packet to prevent blocking
 		}
 	}()
-
-	// 2.Broadcast to Live Dashboard
-	select {
-	case broadcast <- entry:
-	default:
-	}
 }
