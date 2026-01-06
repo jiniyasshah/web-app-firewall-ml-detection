@@ -23,6 +23,26 @@ const (
 	TimeoutDuration = 5 * time.Second
 )
 
+
+// LogFilter defines options for fetching logs
+type LogFilter struct {
+	UserID   string
+	DomainID string // Optional: Empty means all user's domains
+	Page     int64
+	Limit    int64
+}
+
+type PaginatedLogs struct {
+	Data       []interface{} `json:"data"`
+	Pagination struct {
+		CurrentPage int64 `json:"current_page"`
+		TotalPages  int64 `json:"total_pages"`
+		TotalItems  int64 `json:"total_items"`
+		PerPage     int64 `json:"per_page"`
+	} `json:"pagination"`
+}
+
+
 // Connect initializes the MongoDB client
 func Connect(uri string) (*mongo.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -565,4 +585,100 @@ func IsHostAllowed(client *mongo.Client, host string) bool {
 	}
 
 	return false
+}
+
+// GetLogs fetches paginated logs for a user, optionally filtered by a specific domain
+func GetLogs(client *mongo.Client, filter LogFilter) (*PaginatedLogs, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	collection := client.Database(DBName).Collection("logs")
+	mongoFilter := bson.M{}
+
+	// 1. Resolve Domains if DomainID is provided, or get ALL user domains
+	var targetHosts []string
+
+	if filter.DomainID != "" {
+		// Fetch specific domain
+		domain, err := GetDomainByID(client, filter.DomainID)
+		if err != nil {
+			return nil, err
+		}
+		if domain.UserID != filter.UserID {
+			return nil, errors.New("unauthorized")
+		}
+		targetHosts = []string{domain.Name}
+	} else {
+		// Fetch ALL domains for this user
+		domains, err := GetDomainsByUser(client, filter.UserID)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range domains {
+			targetHosts = append(targetHosts, d.Name)
+		}
+	}
+
+	// If user has no domains, return empty
+	if len(targetHosts) == 0 {
+		return &PaginatedLogs{Data: []interface{}{}}, nil
+	}
+
+	// 2. Build Query: "request.headers.Host" must be in our list of owned domains
+	mongoFilter["request.headers.Host"] = bson.M{"$in": targetHosts}
+
+	// 3. Count Total Documents (for pagination)
+	totalItems, err := collection.CountDocuments(ctx, mongoFilter)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. Calculate Pagination
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 20
+	}
+	skip := (filter.Page - 1) * filter.Limit
+	totalPages := int64(0)
+	if filter.Limit > 0 {
+		totalPages = (totalItems + filter.Limit - 1) / filter.Limit
+	}
+
+	// 5. Fetch Data
+	opts := options.Find().
+		SetSort(bson.D{{Key: "timestamp", Value: -1}}). // Newest first
+		SetSkip(skip).
+		SetLimit(filter.Limit)
+
+	cursor, err := collection.Find(ctx, mongoFilter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var logs []interface{}
+	if err = cursor.All(ctx, &logs); err != nil {
+		return nil, err
+	}
+	if logs == nil {
+		logs = []interface{}{}
+	}
+
+	// 6. Return Wrapper
+	return &PaginatedLogs{
+		Data: logs,
+		Pagination: struct {
+			CurrentPage int64 `json:"current_page"`
+			TotalPages  int64 `json:"total_pages"`
+			TotalItems  int64 `json:"total_items"`
+			PerPage     int64 `json:"per_page"`
+		}{
+			CurrentPage: filter.Page,
+			TotalPages:  totalPages,
+			TotalItems:  totalItems,
+			PerPage:     filter.Limit,
+		},
+	}, nil
 }
