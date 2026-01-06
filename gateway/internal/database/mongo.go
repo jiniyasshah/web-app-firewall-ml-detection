@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"math/rand" // [NEW] Needed for Round Robin Load Balancing
 	"regexp"
 	"time"
 
@@ -22,26 +21,6 @@ const (
 	DBName          = "waf"
 	TimeoutDuration = 5 * time.Second
 )
-
-
-// LogFilter defines options for fetching logs
-type LogFilter struct {
-	UserID   string
-	DomainID string // Optional: Empty means all user's domains
-	Page     int64
-	Limit    int64
-}
-
-type PaginatedLogs struct {
-	Data       []interface{} `json:"data"`
-	Pagination struct {
-		CurrentPage int64 `json:"current_page"`
-		TotalPages  int64 `json:"total_pages"`
-		TotalItems  int64 `json:"total_items"`
-		PerPage     int64 `json:"per_page"`
-	} `json:"pagination"`
-}
-
 
 // Connect initializes the MongoDB client
 func Connect(uri string) (*mongo.Client, error) {
@@ -198,8 +177,6 @@ func CreateDNSRecord(client *mongo.Client, record DNSRecord) (string, error) {
 	return record.ID, nil
 }
 
-// CheckDuplicateDNSRecord checks if an EXACT duplicate exists (Name + Type + Content)
-// Used for TXT, MX, NS where you might have multiple records for the same name.
 func CheckDuplicateDNSRecord(client *mongo.Client, domainID, name, rType, content string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
@@ -221,9 +198,6 @@ func CheckDuplicateDNSRecord(client *mongo.Client, domainID, name, rType, conten
 	return true, nil
 }
 
-// CheckDNSRecordExists checks if ANY record of this type exists for the name.
-// Used for A and CNAME to enforce "One Target per Hostname".
-// THIS IS THE FUNCTION THAT PREVENTS MULTIPLE IPs FOR THE SAME RECORD.
 func CheckDNSRecordExists(client *mongo.Client, domainID, name, rType string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
@@ -234,8 +208,6 @@ func CheckDNSRecordExists(client *mongo.Client, domainID, name, rType string) (b
 		"type":      rType,
 	}
 
-	// We do NOT include 'content' in the filter here. 
-	// If ANY 'A' record exists for 'example.com', we return true.
 	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, filter).Err()
 	if err == mongo.ErrNoDocuments {
 		return false, nil
@@ -260,7 +232,6 @@ func GetDNSRecords(client *mongo.Client, domainID string) ([]DNSRecord, error) {
 	if err = cursor.All(ctx, &records); err != nil {
 		return nil, err
 	}
-	// Return empty slice instead of nil for JSON consistency
 	if records == nil {
 		records = []DNSRecord{}
 	}
@@ -287,7 +258,6 @@ func DeleteDNSRecord(client *mongo.Client, recordID string) error {
 	return err
 }
 
-// UpdateDNSRecordProxy updates the proxied status of a record
 func UpdateDNSRecordProxy(client *mongo.Client, recordID string, proxied bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
@@ -300,37 +270,23 @@ func UpdateDNSRecordProxy(client *mongo.Client, recordID string, proxied bool) e
 	return err
 }
 
-// GetOriginIP resolves the backend IP for the Proxy from the user's DNS records
-// UPDATED: Now supports Round-Robin Load Balancing if multiple A records exist.
 func GetOriginIP(client *mongo.Client, host string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Fast timeout for proxy
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) 
 	defer cancel()
 
-	// 1. Try to find 'A' records (Matches ALL records now)
-	cursor, err := client.Database(DBName).Collection("dns_records").Find(ctx, bson.M{
+	var record DNSRecord
+
+	// 1. Try to find an exact 'A' record match first
+	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
 		"name": host,
 		"type": "A",
-	})
+	}).Decode(&record)
 
 	if err == nil {
-		// Read all matching A records
-		var records []DNSRecord
-		if err := cursor.All(ctx, &records); err == nil && len(records) > 0 {
-			// [LOAD BALANCING LOGIC]
-			// If we found multiple records, pick one at random.
-			// This enables simple Round-Robin distribution for the WAF.
-			if len(records) == 1 {
-				return records[0].Content, nil
-			}
-			// Pick a random index
-			randomIndex := rand.Intn(len(records))
-			return records[randomIndex].Content, nil
-		}
+		return record.Content, nil
 	}
 
 	// 2. If no A record, try to find a 'CNAME' record
-	// CNAMEs are strictly unique (Rule 1.2), so FindOne is safe here.
-	var record DNSRecord
 	err = client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
 		"name": host,
 		"type": "CNAME",
@@ -347,12 +303,11 @@ func GetOriginIP(client *mongo.Client, host string) (string, error) {
 // RULE MANAGEMENT
 // ---------------------------------------------------------
 
-// GetRules is the unified function to fetch rules based on a filter
 func GetRules(client *mongo.Client, filter bson.M) ([]detector.WAFRule, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
-	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}) // Stable ordering
+	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}})
 	cursor, err := client.Database(DBName).Collection("rules").Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
@@ -364,7 +319,6 @@ func GetRules(client *mongo.Client, filter bson.M) ([]detector.WAFRule, error) {
 		return nil, err
 	}
 
-	// Safety: return empty slice instead of nil
 	if rules == nil {
 		rules = []detector.WAFRule{}
 	}
@@ -397,7 +351,6 @@ func DeleteRule(client *mongo.Client, ruleID, ownerID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
-	// Safety: Only delete if the user owns it
 	filter := bson.M{"_id": ruleID, "owner_id": ownerID}
 	res, err := client.Database(DBName).Collection("rules").DeleteOne(ctx, filter)
 	if err != nil {
@@ -413,7 +366,6 @@ func DeleteRule(client *mongo.Client, ruleID, ownerID string) error {
 // POLICY MANAGEMENT (Overrides)
 // ---------------------------------------------------------
 
-// GetPoliciesByUser fetches all policies (enabled/disabled states) for a specific user
 func GetPoliciesByUser(client *mongo.Client, userID string) ([]detector.RulePolicy, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
@@ -431,7 +383,6 @@ func GetPoliciesByUser(client *mongo.Client, userID string) ([]detector.RulePoli
 	return policies, nil
 }
 
-// UpsertRulePolicy handles enabling/disabling a rule for a user/domain
 func UpsertRulePolicy(client *mongo.Client, policy detector.RulePolicy) error {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
@@ -450,36 +401,80 @@ func UpsertRulePolicy(client *mongo.Client, policy detector.RulePolicy) error {
 }
 
 // ---------------------------------------------------------
-// LOGGING
+// LOGGING - UPDATED FOR PAGINATION & DIRECT ID MATCHING
 // ---------------------------------------------------------
 
-func GetLogsForUser(client *mongo.Client, userID string, limit int64) ([]interface{}, error) {
-	// 1.Get all domain IDs for this user
-	domains, err := GetDomainsByUser(client, userID)
+// LogFilter defines options for fetching logs
+type LogFilter struct {
+	UserID   string
+	DomainID string // Optional: Empty means all user's domains
+	Page     int64
+	Limit    int64
+}
+
+type PaginatedLogs struct {
+	Data       []interface{} `json:"data"`
+	Pagination struct {
+		CurrentPage int64 `json:"current_page"`
+		TotalPages  int64 `json:"total_pages"`
+		TotalItems  int64 `json:"total_items"`
+		PerPage     int64 `json:"per_page"`
+	} `json:"pagination"`
+}
+
+// GetLogs fetches paginated logs for a user, using direct ID matching
+func GetLogs(client *mongo.Client, filter LogFilter) (*PaginatedLogs, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	collection := client.Database(DBName).Collection("logs")
+	mongoFilter := bson.M{}
+
+	// 1. Build Query using IDs (New Schema)
+	if filter.DomainID != "" {
+		// Specific domain filter
+		// Check ownership of domain first for security
+		domain, err := GetDomainByID(client, filter.DomainID)
+		if err != nil {
+			return nil, err
+		}
+		if domain.UserID != filter.UserID {
+			return nil, errors.New("unauthorized: domain does not belong to user")
+		}
+		
+		// Query by domain_id field
+		mongoFilter["domain_id"] = filter.DomainID
+	} else {
+		// All domains for this user
+		mongoFilter["user_id"] = filter.UserID
+	}
+
+	// 2. Count Total Documents (for pagination)
+	totalItems, err := collection.CountDocuments(ctx, mongoFilter)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(domains) == 0 {
-		return []interface{}{}, nil
+	// 3. Calculate Pagination
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 20
+	}
+	skip := (filter.Page - 1) * filter.Limit
+	totalPages := int64(0)
+	if filter.Limit > 0 {
+		totalPages = (totalItems + filter.Limit - 1) / filter.Limit
 	}
 
-	// 2.Filter logs by Host Header matching user's domains
-	domainNames := make([]string, len(domains))
-	for i, d := range domains {
-		domainNames[i] = d.Name
-	}
+	// 4. Fetch Data
+	opts := options.Find().
+		SetSort(bson.D{{Key: "timestamp", Value: -1}}). // Newest first
+		SetSkip(skip).
+		SetLimit(filter.Limit)
 
-	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
-	defer cancel()
-
-	filter := bson.M{
-		"request.headers.Host": bson.M{"$in": domainNames},
-	}
-
-	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: -1}}).SetLimit(limit)
-
-	cursor, err := client.Database(DBName).Collection("logs").Find(ctx, filter, opts)
+	cursor, err := collection.Find(ctx, mongoFilter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -489,13 +484,29 @@ func GetLogsForUser(client *mongo.Client, userID string, limit int64) ([]interfa
 	if err = cursor.All(ctx, &logs); err != nil {
 		return nil, err
 	}
+	if logs == nil {
+		logs = []interface{}{}
+	}
 
-	return logs, nil
+	// 5. Return Wrapper
+	return &PaginatedLogs{
+		Data: logs,
+		Pagination: struct {
+			CurrentPage int64 `json:"current_page"`
+			TotalPages  int64 `json:"total_pages"`
+			TotalItems  int64 `json:"total_items"`
+			PerPage     int64 `json:"per_page"`
+		}{
+			CurrentPage: filter.Page,
+			TotalPages:  totalPages,
+			TotalItems:  totalItems,
+			PerPage:     filter.Limit,
+		},
+	}, nil
 }
 
 // --- GLOBAL FETCH HELPERS (For API Cache Reload) ---
 
-// GetAllDomains fetches every domain in the system to build the routing map
 func GetAllDomains(client *mongo.Client) ([]detector.Domain, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
@@ -509,7 +520,6 @@ func GetAllDomains(client *mongo.Client) ([]detector.Domain, error) {
 	return domains, nil
 }
 
-// GetAllPolicies fetches every policy to determine rule enablement
 func GetAllPolicies(client *mongo.Client) ([]detector.RulePolicy, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
@@ -523,7 +533,6 @@ func GetAllPolicies(client *mongo.Client) ([]detector.RulePolicy, error) {
 	return policies, nil
 }
 
-// UpdateDomainStatus activates the domain after verification
 func UpdateDomainStatus(client *mongo.Client, domainID, status string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -545,7 +554,6 @@ func UpdateDomainStatus(client *mongo.Client, domainID, status string) error {
 // HELPERS
 // ---------------------------------------------------------
 
-// compileRegexes pre-compiles regex strings in rules to Go Regexp objects
 func compileRegexes(rules []detector.WAFRule) []detector.WAFRule {
 	for i := range rules {
 		for j := range rules[i].Conditions {
@@ -565,120 +573,21 @@ func compileRegexes(rules []detector.WAFRule) []detector.WAFRule {
 	return rules
 }
 
-// [NEW] IsHostAllowed checks if a host is either a registered domain OR a valid DNS record
 func IsHostAllowed(client *mongo.Client, host string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// 1. Check if it matches a Root Domain
 	var domain detector.Domain
 	err := client.Database(DBName).Collection("domains").FindOne(ctx, bson.M{"name": host}).Decode(&domain)
 	if err == nil {
-		return true // Found exact match in domains
+		return true 
 	}
 
-	// 2. Check if it matches a DNS Record (e.g. www.example.com)
 	var record DNSRecord
 	err = client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{"name": host}).Decode(&record)
 	if err == nil {
-		return true // Found match in dns_records
+		return true 
 	}
 
 	return false
-}
-
-// GetLogs fetches paginated logs for a user, optionally filtered by a specific domain
-func GetLogs(client *mongo.Client, filter LogFilter) (*PaginatedLogs, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	collection := client.Database(DBName).Collection("logs")
-	mongoFilter := bson.M{}
-
-	// 1. Resolve Domains if DomainID is provided, or get ALL user domains
-	var targetHosts []string
-
-	if filter.DomainID != "" {
-		// Fetch specific domain
-		domain, err := GetDomainByID(client, filter.DomainID)
-		if err != nil {
-			return nil, err
-		}
-		if domain.UserID != filter.UserID {
-			return nil, errors.New("unauthorized")
-		}
-		targetHosts = []string{domain.Name}
-	} else {
-		// Fetch ALL domains for this user
-		domains, err := GetDomainsByUser(client, filter.UserID)
-		if err != nil {
-			return nil, err
-		}
-		for _, d := range domains {
-			targetHosts = append(targetHosts, d.Name)
-		}
-	}
-
-	// If user has no domains, return empty
-	if len(targetHosts) == 0 {
-		return &PaginatedLogs{Data: []interface{}{}}, nil
-	}
-
-	// 2. Build Query: "request.headers.Host" must be in our list of owned domains
-	mongoFilter["request.headers.Host"] = bson.M{"$in": targetHosts}
-
-	// 3. Count Total Documents (for pagination)
-	totalItems, err := collection.CountDocuments(ctx, mongoFilter)
-	if err != nil {
-		return nil, err
-	}
-
-	// 4. Calculate Pagination
-	if filter.Page < 1 {
-		filter.Page = 1
-	}
-	if filter.Limit < 1 {
-		filter.Limit = 20
-	}
-	skip := (filter.Page - 1) * filter.Limit
-	totalPages := int64(0)
-	if filter.Limit > 0 {
-		totalPages = (totalItems + filter.Limit - 1) / filter.Limit
-	}
-
-	// 5. Fetch Data
-	opts := options.Find().
-		SetSort(bson.D{{Key: "timestamp", Value: -1}}). // Newest first
-		SetSkip(skip).
-		SetLimit(filter.Limit)
-
-	cursor, err := collection.Find(ctx, mongoFilter, opts)
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	var logs []interface{}
-	if err = cursor.All(ctx, &logs); err != nil {
-		return nil, err
-	}
-	if logs == nil {
-		logs = []interface{}{}
-	}
-
-	// 6. Return Wrapper
-	return &PaginatedLogs{
-		Data: logs,
-		Pagination: struct {
-			CurrentPage int64 `json:"current_page"`
-			TotalPages  int64 `json:"total_pages"`
-			TotalItems  int64 `json:"total_items"`
-			PerPage     int64 `json:"per_page"`
-		}{
-			CurrentPage: filter.Page,
-			TotalPages:  totalPages,
-			TotalItems:  totalItems,
-			PerPage:     filter.Limit,
-		},
-	}, nil
 }

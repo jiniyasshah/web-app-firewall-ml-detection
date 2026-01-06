@@ -94,10 +94,18 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Logging & Action
+	
+	// [FIX] Ensure headers map is not nil and include Host
+	headers := make(map[string][]string)
+	for k, v := range r.Header {
+		headers[k] = v
+	}
+	headers["Host"] = []string{host} // Manually add Host header for logs
+
 	fullReq := logger.FullRequest{
 		Method:  r.Method,
 		URL:     r.URL.String(),
-		Headers: r.Header,
+		Headers: headers,
 		Body:    string(bodyBytes),
 	}
 
