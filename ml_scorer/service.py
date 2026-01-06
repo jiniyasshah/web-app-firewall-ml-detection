@@ -179,6 +179,7 @@ def predict(data: RequestData):
     # --- 5. Hybrid Analysis Loop ---
     for source, content in inspectable_items.items():
         if not content.strip(): continue
+        if content.strip() in ["/", "\\"]: continue
         
         # Skip short, safe tokens
         is_short = len(content) < 4
