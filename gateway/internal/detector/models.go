@@ -9,11 +9,11 @@ import (
 
 type User struct {
 	ID       string `bson:"_id,omitempty" json:"id"`
-	Name     string `bson:"name" json:"name"`           // [NEW] User's Display Name
+	Name     string `bson:"name" json:"name"`
 	Email    string `bson:"email" json:"email"`
-	Password string `bson:"password" json:"-"`          // Password is never output to JSON
+	Password string `bson:"password" json:"-"`
 }
-// UserInput is for registration/login requests
+
 type UserInput struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
@@ -23,21 +23,20 @@ type UserInput struct {
 type Domain struct {
 	ID          string    `bson:"_id,omitempty" json:"id"`
 	UserID      string    `bson:"user_id" json:"user_id"`
-	Name        string    `bson:"name" json:"name"`           // e.g. "myapp.com"
+	Name        string    `bson:"name" json:"name"`
 	Nameservers []string  `bson:"nameservers" json:"nameservers"`
-	Status      string    `bson:"status" json:"status"`       // "pending_verification", "active"     // Is WAF enabled for this domain?
+	Status      string    `bson:"status" json:"status"`
 	CreatedAt   time.Time `bson:"created_at" json:"created_at"`
 }
 
-// DNSRecord represents individual DNS records for a domain
 type DNSRecord struct {
-	ID        string `bson:"_id,omitempty" json:"id"`
-	DomainID  string `bson:"domain_id" json:"domain_id"`
-	Name      string `bson:"name" json:"name"`         // e.g. "@", "www", "api"
-	Type      string `bson:"type" json:"type"`         // "A", "CNAME", "MX", etc.
-	Content   string `bson:"content" json:"content"`   // "1.2.3.4" or "example.com"
-	TTL       int    `bson:"ttl" json:"ttl"`           // 300, 3600, etc.
-	Proxied   bool   `bson:"proxied" json:"proxied"`   // Is this record protected by WAF?
+	ID        string    `bson:"_id,omitempty" json:"id"`
+	DomainID  string    `bson:"domain_id" json:"domain_id"`
+	Name      string    `bson:"name" json:"name"`
+	Type      string    `bson:"type" json:"type"`
+	Content   string    `bson:"content" json:"content"`
+	TTL       int       `bson:"ttl" json:"ttl"`
+	Proxied   bool      `bson:"proxied" json:"proxied"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
 }
 
@@ -45,21 +44,19 @@ type DNSRecord struct {
 
 type WAFRule struct {
 	ID         string      `bson:"_id,omitempty" json:"id"`
-	OwnerID    string      `bson:"owner_id,omitempty" json:"owner_id"` // Empty = Global, Set = Private
+	OwnerID    string      `bson:"owner_id,omitempty" json:"owner_id"`
 	Name       string      `bson:"name" json:"name"`
 	Conditions []Condition `bson:"conditions" json:"conditions"`
 	OnMatch    Action      `bson:"on_match" json:"on_match"`
-	
-	// Enabled is a virtual field for the UI, calculated from Policies
-	Enabled    bool        `bson:"-" json:"enabled"` 
+	Enabled    bool        `bson:"-" json:"enabled"`
 }
 
 type RulePolicy struct {
-	ID        string `bson:"_id,omitempty" json:"id"`
-	UserID    string `bson:"user_id" json:"user_id"`
-	RuleID    string `bson:"rule_id" json:"rule_id"`
-	DomainID  string `bson:"domain_id,omitempty" json:"domain_id"`
-	Enabled   bool   `bson:"enabled" json:"enabled"`
+	ID       string `bson:"_id,omitempty" json:"id"`
+	UserID   string `bson:"user_id" json:"user_id"`
+	RuleID   string `bson:"rule_id" json:"rule_id"`
+	DomainID string `bson:"domain_id,omitempty" json:"domain_id"`
+	Enabled  bool   `bson:"enabled" json:"enabled"`
 }
 
 type Condition struct {
@@ -73,4 +70,30 @@ type Action struct {
 	ScoreAdd  int      `bson:"score_add" json:"score_add"`
 	Tags      []string `bson:"tags" json:"tags"`
 	HardBlock bool     `bson:"hard_block" json:"hard_block"`
+}
+
+// --- LOGGING MODELS (Moved from logger/logger.go) ---
+
+type FullRequest struct {
+	Method  string              `bson:"method" json:"method"`
+	URL     string              `bson:"url" json:"url"`
+	Headers map[string][]string `bson:"headers" json:"headers"`
+	Body    string              `bson:"body" json:"body"`
+}
+
+type AttackLog struct {
+	ID             interface{} `bson:"_id,omitempty" json:"_id"` // Matches MongoDB ID
+	UserID         string      `bson:"user_id" json:"user_id"`
+	DomainID       string      `bson:"domain_id" json:"domain_id"`
+	Timestamp      time.Time   `bson:"timestamp" json:"timestamp"`
+	IP             string      `bson:"ip" json:"ip"`
+	RequestPath    string      `bson:"request_path" json:"request_path"`
+	Reason         string      `bson:"reason" json:"reason"`
+	Source         string      `bson:"source" json:"source"`
+	Tags           []string    `bson:"tags" json:"tags"`
+	Action         string      `bson:"action" json:"action"`
+	Score          int         `bson:"score,omitempty" json:"score,omitempty"`
+	MLConfidence   float64     `bson:"ml_confidence,omitempty" json:"ml_confidence,omitempty"`
+	Request        FullRequest `bson:"request" json:"request"`
+	TriggerPayload string      `bson:"trigger_payload" json:"trigger_payload"`
 }

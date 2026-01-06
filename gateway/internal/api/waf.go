@@ -1,5 +1,3 @@
-// type: uploaded file
-// fileName: jiniyasshah/web-app-firewall-ml-detection/web-app-firewall-ml-detection-test/gateway/internal/api/waf.go
 package api
 
 import (
@@ -96,13 +94,14 @@ func (h *APIHandler) WAFHandler(w http.ResponseWriter, r *http.Request) {
 	// 4. Logging & Action
 	
 	// [FIX] Ensure headers map is not nil and include Host
-	headers := make(map[string][]string)
+headers := make(map[string][]string)
 	for k, v := range r.Header {
 		headers[k] = v
 	}
-	headers["Host"] = []string{host} // Manually add Host header for logs
+	headers["Host"] = []string{host}
 
-	fullReq := logger.FullRequest{
+	// [FIXED] logger.FullRequest -> detector.FullRequest
+	fullReq := detector.FullRequest{
 		Method:  r.Method,
 		URL:     r.URL.String(),
 		Headers: headers,

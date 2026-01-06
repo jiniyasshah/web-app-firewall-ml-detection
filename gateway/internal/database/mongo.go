@@ -1,5 +1,3 @@
-// type: uploaded file
-// fileName: jiniyasshah/web-app-firewall-ml-detection/web-app-firewall-ml-detection-test/gateway/internal/database/mongo.go
 package database
 
 import (
@@ -21,6 +19,8 @@ const (
 	DBName          = "waf"
 	TimeoutDuration = 5 * time.Second
 )
+
+
 
 // Connect initializes the MongoDB client
 func Connect(uri string) (*mongo.Client, error) {
@@ -404,16 +404,16 @@ func UpsertRulePolicy(client *mongo.Client, policy detector.RulePolicy) error {
 // LOGGING - UPDATED FOR PAGINATION & DIRECT ID MATCHING
 // ---------------------------------------------------------
 
-// LogFilter defines options for fetching logs
 type LogFilter struct {
 	UserID   string
-	DomainID string // Optional: Empty means all user's domains
+	DomainID string
 	Page     int64
 	Limit    int64
 }
 
 type PaginatedLogs struct {
-	Data       []interface{} `json:"data"`
+	// [CRITICAL FIX] Use specific struct, NOT interface{}
+	Data       []detector.AttackLog `json:"data"` 
 	Pagination struct {
 		CurrentPage int64 `json:"current_page"`
 		TotalPages  int64 `json:"total_pages"`
@@ -422,7 +422,6 @@ type PaginatedLogs struct {
 	} `json:"pagination"`
 }
 
-// GetLogs fetches paginated logs for a user, using direct ID matching
 func GetLogs(client *mongo.Client, filter LogFilter) (*PaginatedLogs, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -430,47 +429,34 @@ func GetLogs(client *mongo.Client, filter LogFilter) (*PaginatedLogs, error) {
 	collection := client.Database(DBName).Collection("logs")
 	mongoFilter := bson.M{}
 
-	// 1. Build Query using IDs (New Schema)
 	if filter.DomainID != "" {
-		// Specific domain filter
-		// Check ownership of domain first for security
 		domain, err := GetDomainByID(client, filter.DomainID)
 		if err != nil {
 			return nil, err
 		}
 		if domain.UserID != filter.UserID {
-			return nil, errors.New("unauthorized: domain does not belong to user")
+			return nil, errors.New("unauthorized")
 		}
-		
-		// Query by domain_id field
 		mongoFilter["domain_id"] = filter.DomainID
 	} else {
-		// All domains for this user
 		mongoFilter["user_id"] = filter.UserID
 	}
 
-	// 2. Count Total Documents (for pagination)
 	totalItems, err := collection.CountDocuments(ctx, mongoFilter)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Calculate Pagination
-	if filter.Page < 1 {
-		filter.Page = 1
-	}
-	if filter.Limit < 1 {
-		filter.Limit = 20
-	}
+	if filter.Page < 1 { filter.Page = 1 }
+	if filter.Limit < 1 { filter.Limit = 20 }
 	skip := (filter.Page - 1) * filter.Limit
 	totalPages := int64(0)
 	if filter.Limit > 0 {
 		totalPages = (totalItems + filter.Limit - 1) / filter.Limit
 	}
 
-	// 4. Fetch Data
 	opts := options.Find().
-		SetSort(bson.D{{Key: "timestamp", Value: -1}}). // Newest first
+		SetSort(bson.D{{Key: "timestamp", Value: -1}}).
 		SetSkip(skip).
 		SetLimit(filter.Limit)
 
@@ -480,15 +466,15 @@ func GetLogs(client *mongo.Client, filter LogFilter) (*PaginatedLogs, error) {
 	}
 	defer cursor.Close(ctx)
 
-	var logs []interface{}
+	// [CRITICAL FIX] Decode into the struct to get clean JSON
+	var logs []detector.AttackLog
 	if err = cursor.All(ctx, &logs); err != nil {
 		return nil, err
 	}
 	if logs == nil {
-		logs = []interface{}{}
+		logs = []detector.AttackLog{}
 	}
 
-	// 5. Return Wrapper
 	return &PaginatedLogs{
 		Data: logs,
 		Pagination: struct {
