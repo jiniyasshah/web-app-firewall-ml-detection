@@ -633,3 +633,21 @@ func GetOriginRecord(client *mongo.Client, host string) (*DNSRecord, error) {
 
 	return nil, err
 }
+
+
+// Add this function to the end of the file
+
+func UpdateDNSRecordOriginSSL(client *mongo.Client, recordID string, sslStatus bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	collection := client.Database(DBName).Collection("dns_records")
+
+	// Update only the origin_ssl field
+	update := bson.M{
+		"$set": bson.M{"origin_ssl": sslStatus},
+	}
+
+	_, err := collection.UpdateOne(ctx, bson.M{"_id": recordID}, update)
+	return err
+}

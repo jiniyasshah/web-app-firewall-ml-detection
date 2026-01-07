@@ -34,7 +34,7 @@ func (h *APIHandler) ManageRecords(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		h.addRecord(w, r)
 	case http.MethodPut:
-		h.toggleProxy(w, r)
+		h.updateRecord(w, r)
 	case http.MethodDelete:
 		h.deleteRecord(w, r)
 	default:
@@ -254,8 +254,8 @@ func (h *APIHandler) addRecord(w http.ResponseWriter, r *http.Request) {
 }
 
 // PUT /api/dns/records?domain_id=xxx&record_id=yyy
-// Body: { "proxied": true/false }
-func (h *APIHandler) toggleProxy(w http.ResponseWriter, r *http.Request) {
+// [RENAMED & UPDATED] Handles both Proxy Toggle and Origin SSL Toggle
+func (h *APIHandler) updateRecord(w http.ResponseWriter, r *http.Request) {
 	domainID := r.URL.Query().Get("domain_id")
 	recordID := r.URL.Query().Get("record_id")
 
@@ -264,16 +264,20 @@ func (h *APIHandler) toggleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Parse the new state
+	// 1. Parse a Generic Request Payload
+	// We capture all possible fields.
 	var req struct {
-		Proxied bool `json:"proxied"`
+		Action    string `json:"action"`     // "toggle_origin_ssl" or empty (default to proxy)
+		Proxied   bool   `json:"proxied"`    // For Proxy updates
+		OriginSSL bool   `json:"origin_ssl"` // For SSL updates
 	}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.WriteJSONError(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	// 2. Security Checks
+	// 2. Security: Verify Ownership (Common for all updates)
 	domain, err := database.GetDomainByID(h.MongoClient, domainID)
 	if err != nil {
 		h.WriteJSONError(w, "Domain not found", http.StatusNotFound)
@@ -285,14 +289,39 @@ func (h *APIHandler) toggleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Get the OLD record state
+	// ---------------------------------------------------------
+	// BRANCH 1: Origin SSL Update
+	// ---------------------------------------------------------
+	if req.Action == "toggle_origin_ssl" {
+		// Call the DB function to update just the SSL flag
+		err := database.UpdateDNSRecordOriginSSL(h.MongoClient, recordID, req.OriginSSL)
+		if err != nil {
+			h.WriteJSONError(w, "Failed to update Origin SSL: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "success",
+			"message":    "Origin SSL status updated",
+			"origin_ssl": req.OriginSSL,
+		})
+		return
+	}
+
+	// ---------------------------------------------------------
+	// BRANCH 2: Proxy Status Update (Default / Legacy)
+	// ---------------------------------------------------------
+	// If action is empty or "toggle_proxy", we run the complex proxy logic.
+
+	// A. Get the OLD record state
 	oldRecord, err := database.GetDNSRecordByID(h.MongoClient, recordID)
 	if err != nil {
 		h.WriteJSONError(w, "Record not found", http.StatusNotFound)
 		return
 	}
 
-	// 4. Calculate what the SQL database currently holds (Old State)
+	// B. Calculate what needs to be removed from PowerDNS
 	wafIP := os.Getenv("WAF_PUBLIC_IP")
 	if wafIP == "" {
 		wafIP = "139.59.76.127"
@@ -301,7 +330,6 @@ func (h *APIHandler) toggleProxy(w http.ResponseWriter, r *http.Request) {
 	contentToDelete := oldRecord.Content
 	typeToDelete := oldRecord.Type
 
-	// logic: if it *was* proxied, SQL has the WAF IP and Type A
 	shouldHaveBeenProxied := oldRecord.Proxied
 	// Safety check: TXT/MX/NS/SOA never proxy
 	if oldRecord.Type == "TXT" || oldRecord.Type == "MX" || oldRecord.Type == "NS" || oldRecord.Type == "SOA" {
@@ -313,22 +341,21 @@ func (h *APIHandler) toggleProxy(w http.ResponseWriter, r *http.Request) {
 		typeToDelete = "A"
 	}
 
-	// 5. Delete OLD entry from PowerDNS
+	// C. Delete OLD entry from PowerDNS
 	err = database.DeletePowerDNSRecordByContent(oldRecord.Name, typeToDelete, contentToDelete)
 	if err != nil {
 		h.WriteJSONError(w, "Failed to update DNS (Delete Phase): "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 6. Update MongoDB to NEW state
+	// D. Update MongoDB to NEW state
 	err = database.UpdateDNSRecordProxy(h.MongoClient, recordID, req.Proxied)
 	if err != nil {
 		h.WriteJSONError(w, "Failed to update database", http.StatusInternalServerError)
 		return
 	}
 
-	// 7. Add NEW entry to PowerDNS
-	// The Add function handles the logic: if req.Proxied is true, it inserts WAF IP.
+	// E. Add NEW entry to PowerDNS
 	err = database.AddPowerDNSRecord(oldRecord.Name, oldRecord.Type, oldRecord.Content, req.Proxied, wafIP)
 	if err != nil {
 		h.WriteJSONError(w, "Failed to update DNS (Add Phase): "+err.Error(), http.StatusInternalServerError)
@@ -342,7 +369,6 @@ func (h *APIHandler) toggleProxy(w http.ResponseWriter, r *http.Request) {
 		"proxied": req.Proxied,
 	})
 }
-
 // GET /api/dns/records? domain_id=xxx
 func (h *APIHandler) listRecords(w http.ResponseWriter, r *http.Request) {
 	domainID := r.URL.Query().Get("domain_id")
