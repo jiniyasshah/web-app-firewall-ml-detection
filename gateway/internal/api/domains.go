@@ -204,8 +204,19 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if verified {
-		err := database.UpdateDomainStatus(h.MongoClient, domain.ID, "active")
+if verified {
+		// 1. CRITICAL: Revoke old ownership
+		// If another user had this domain (Active or Pending), remove their record
+		// so this new User becomes the sole Owner.
+		err := database.RevokeOldOwnership(h.MongoClient, domain.Name, domain.ID)
+		if err != nil {
+			log.Printf("Error revoking old ownership for %s: %v", domain.Name, err)
+			// We continue; failing to delete shouldn't block the valid user, 
+			// but we should log it.
+		}
+
+		// 2. Activate the new domain
+		err = database.UpdateDomainStatus(h.MongoClient, domain.ID, "active")
 		if err != nil {
 			h.WriteJSONError(w, "DB Update failed", http.StatusInternalServerError)
 			return
@@ -213,7 +224,7 @@ func (h *APIHandler) VerifyDomain(w http.ResponseWriter, r *http.Request) {
 
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "active",
-			"message": "Domain successfully verified! You may now add DNS records.",
+			"message": "Domain successfully verified! You are now the owner.",
 		})
 	} else {
 		w.WriteHeader(http.StatusConflict)

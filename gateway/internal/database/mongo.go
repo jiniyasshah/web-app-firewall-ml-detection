@@ -123,11 +123,19 @@ func GetDomainsByUser(client *mongo.Client, userID string) ([]detector.Domain, e
 
 // GetDomainByName finds config based on Host header (e.g., "example.com")
 func GetDomainByName(client *mongo.Client, host string) (*detector.Domain, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // Fast timeout for request path
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	var domain detector.Domain
-	err := client.Database(DBName).Collection("domains").FindOne(ctx, bson.M{"name": host}).Decode(&domain)
+	
+	// CRITICAL FIX: Only match domains that are ACTIVE.
+	// This prevents a "pending" duplicate domain from intercepting logs/traffic.
+	filter := bson.M{
+		"name":   host,
+		"status": "active",
+	}
+
+	err := client.Database(DBName).Collection("domains").FindOne(ctx, filter).Decode(&domain)
 	if err != nil {
 		return nil, err
 	}
@@ -576,4 +584,19 @@ func IsHostAllowed(client *mongo.Client, host string) bool {
 	}
 
 	return false
+}
+
+func RevokeOldOwnership(client *mongo.Client, domainName string, newOwnerID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Delete ANY other domain entry with the same name that isn't the current one.
+	// This facilitates the "Takeover" logic.
+	filter := bson.M{
+		"name": domainName,
+		"_id":  bson.M{"$ne": newOwnerID},
+	}
+
+	_, err := client.Database(DBName).Collection("domains").DeleteMany(ctx, filter)
+	return err
 }
