@@ -186,7 +186,7 @@ func main() {
 
 	hostPolicy := func(ctx context.Context, host string) error {
 		// 1. Allow Admin/Dashboard domains explicitly
-		if host == "api.minishield.tech" || host == "dashboard.minishield.tech" || host == "minishield.tech" {
+		if host == "api.minishield.tech" || host == "test.minishield.tech" || host == "minishield.tech" {
 			return nil
 		}
 
