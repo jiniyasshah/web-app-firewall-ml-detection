@@ -651,3 +651,21 @@ func UpdateDNSRecordOriginSSL(client *mongo.Client, recordID string, sslStatus b
 	_, err := collection.UpdateOne(ctx, bson.M{"_id": recordID}, update)
 	return err
 }
+
+// GetAllDNSRecords fetches all DNS records (for WAF routing)
+func GetAllDNSRecords(client *mongo.Client) ([]DNSRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cursor, err := client.Database(DBName).Collection("dns_records").Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []DNSRecord
+	if err = cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+	return records, nil
+}

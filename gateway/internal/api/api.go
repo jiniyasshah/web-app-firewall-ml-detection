@@ -85,7 +85,7 @@ func (h *APIHandler) ReloadRules() {
 	h.rulesMutex.Lock()
 	defer h.rulesMutex.Unlock()
 
-	// 1. Fetch All Data (Keep this as is, so we get everything)
+	// 1. Fetch All Data
 	allRules, err := database.GetRules(h.MongoClient, bson.M{})
 	if err != nil {
 		log.Printf("[ERROR] ReloadRules: Failed to load rules: %v", err)
@@ -101,19 +101,40 @@ func (h *APIHandler) ReloadRules() {
 		log.Printf("[ERROR] ReloadRules: Failed to load domains: %v", err)
 		return
 	}
+	// [NEW] Fetch all DNS Records (Subdomains)
+	dnsRecords, err := database.GetAllDNSRecords(h.MongoClient)
+	if err != nil {
+		log.Printf("[ERROR] ReloadRules: Failed to load dns records: %v", err)
+		return
+	}
 
-	// 2. [FIXED] Update Domain Map Cache
-	// CRITICAL: We only load "active" domains into the WAF runtime map.
-	// This prevents a "pending" duplicate from overwriting a valid "active" domain.
+	// 2. Build the Domain Map (The Routing Table)
 	newDomainMap := make(map[string]detector.Domain)
+	
+	// Helper map to find Parent Domain by ID
+	activeDomainsByID := make(map[string]detector.Domain)
+
+	// A. Add Root Domains (e.g., "lemepush.tech")
 	for _, d := range domains {
 		if d.Status == "active" {
 			newDomainMap[d.Name] = d
+			activeDomainsByID[d.ID] = d
 		}
 	}
+
+	// B. [NEW] Add Subdomains (e.g., "www.lemepush.tech")
+	for _, r := range dnsRecords {
+		// Only add if the parent domain is Active
+		if parentDomain, ok := activeDomainsByID[r.DomainID]; ok {
+			// Map the subdomain (r.Name) to the Parent Domain's configuration.
+			// This ensures "www" gets the same rules/owner as the root.
+			newDomainMap[r.Name] = parentDomain
+		}
+	}
+
 	h.domainMap = newDomainMap
 
-	// 3. Separate Global vs Private Rules
+	// 3. Separate Global vs Private Rules (Existing Logic)
 	globalRules := []detector.WAFRule{}
 	privateRules := make(map[string][]detector.WAFRule)
 
@@ -125,18 +146,16 @@ func (h *APIHandler) ReloadRules() {
 		}
 	}
 
-	// 4. Index Policies
+	// 4. Index Policies (Existing Logic)
 	policyMap := make(map[policyKey]bool)
 	for _, p := range policies {
 		policyMap[policyKey{RuleID: p.RuleID, DomainID: p.DomainID}] = p.Enabled
 	}
 
-	// 5. Build Effective Ruleset
+	// 5. Build Effective Ruleset (Existing Logic)
 	newDomainRules := make(map[string][]detector.WAFRule)
 
 	for _, d := range domains {
-		// [FIXED] Skip pending domains here too.
-		// We don't want to build rules for domains that aren't verified.
 		if d.Status != "active" {
 			continue
 		}
@@ -156,16 +175,24 @@ func (h *APIHandler) ReloadRules() {
 				}
 			}
 		}
+		
+		// Map rules to the Root Domain Name
 		newDomainRules[d.Name] = effective
+		
+		// [NEW] Also map rules to all Subdomains of this domain
+		// This ensures "www" gets the same firewall rules as root.
+		for _, r := range dnsRecords {
+			if r.DomainID == d.ID {
+				newDomainRules[r.Name] = effective
+			}
+		}
 	}
 
 	h.domainRules = newDomainRules
 	h.globalFallback = globalRules
 
-	log.Printf("♻️  Rules Reloaded. Configured %d active domains.", len(h.domainRules))
+	log.Printf("♻️  Rules Reloaded. Routing active for %d hosts.", len(h.domainMap))
 }
-
-// ... (rest of file remains the same)
 
 func isEnabled(ruleID, domainID string, policies map[policyKey]bool, def bool) bool {
 	if status, exists := policies[policyKey{RuleID: ruleID, DomainID: domainID}]; exists {
