@@ -108,7 +108,7 @@ func main() {
 			rawTarget := originIP
 			// Basic heuristic to add scheme if missing
 			if len(rawTarget) < 4 || rawTarget[:4] != "http" {
-				rawTarget = "http://" + rawTarget
+				rawTarget = "https://" + rawTarget
 			}
 			targetURL, _ = url.Parse(rawTarget)
 			log.Printf("[Proxy] Routing %s -> %s", incomingHost, rawTarget)
@@ -126,20 +126,24 @@ func main() {
 	}
 
 	// --- DEFINE THE PROXY WITH ERROR HANDLER ---
-	proxy := &httputil.ReverseProxy{
-		Director: director,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("🔥 Proxy Error for %s: %v", r.Host, err)
+proxy := &httputil.ReverseProxy{
+        Director: director,
+        ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+            log.Printf("🔥 Proxy Error for %s: %v", r.Host, err)
 
-			if r.Context().Err() != nil {
-				return
-			}
+            if r.Context().Err() != nil {
+                return
+            }
 
-			w.WriteHeader(http.StatusBadGateway)
-			w.Header().Set("Content-Type", "text/html")
-			w.Write(page502)
-		},
-	}
+            w.WriteHeader(http.StatusBadGateway)
+            w.Header().Set("Content-Type", "text/html")
+            w.Write(page502)
+        },
+        // [NEW] Add this Transport block to skip SSL verification for the backend
+        Transport: &http.Transport{
+            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+        },
+    }
 
 	// 6. INIT API HANDLER
 	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, defaultOrigin, wafPublicIP, page404)
