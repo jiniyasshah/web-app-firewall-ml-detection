@@ -163,9 +163,13 @@ type DNSRecord struct {
 	DomainID  string    `bson:"domain_id" json:"domain_id"`
 	Name      string    `bson:"name" json:"name"`
 	Type      string    `bson:"type" json:"type"`
-	Content   string    `bson:"content" json:"content"` // This is the ORIGIN IP (User View)
+	Content   string    `bson:"content" json:"content"`
 	TTL       int       `bson:"ttl" json:"ttl"`
 	Proxied   bool      `bson:"proxied" json:"proxied"`
+    
+    // [ADD THIS LINE]
+	OriginSSL bool      `bson:"origin_ssl" json:"origin_ssl"` 
+
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
 }
 
@@ -599,4 +603,33 @@ func RevokeOldOwnership(client *mongo.Client, domainName string, newOwnerID stri
 
 	_, err := client.Database(DBName).Collection("domains").DeleteMany(ctx, filter)
 	return err
+}
+
+func GetOriginRecord(client *mongo.Client, host string) (*DNSRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) 
+	defer cancel()
+
+	var record DNSRecord
+
+	// 1. Try to find an exact 'A' record match
+	err := client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
+		"name": host,
+		"type": "A",
+	}).Decode(&record)
+
+	if err == nil {
+		return &record, nil
+	}
+
+	// 2. If no A record, try to find a 'CNAME' record
+	err = client.Database(DBName).Collection("dns_records").FindOne(ctx, bson.M{
+		"name": host,
+		"type": "CNAME",
+	}).Decode(&record)
+
+	if err == nil {
+		return &record, nil
+	}
+
+	return nil, err
 }

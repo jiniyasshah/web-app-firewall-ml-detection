@@ -37,6 +37,7 @@ type DNSRecord struct {
 	Content   string    `bson:"content" json:"content"`
 	TTL       int       `bson:"ttl" json:"ttl"`
 	Proxied   bool      `bson:"proxied" json:"proxied"`
+	OriginSSL bool      `bson:"origin_ssl" json:"origin_ssl"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
 }
 

@@ -96,24 +96,35 @@ func main() {
 		log.Fatalf("❌ Critical: Could not load pages/502.html: %v", err)
 	}
 
-	// 5. REVERSE PROXY LOGIC
+	// 5. REVERSE PROXY LOGIC (Dynamic Origin Switching)
 	director := func(req *http.Request) {
 		incomingHost := req.Host
 		var targetURL *url.URL
 
-		// [FIX] A. Look up origin IP from the user's DNS Records (New Collection)
-		originIP, err := database.GetOriginIP(client, incomingHost)
+		// [UPDATED] Look up Full Record to check OriginSSL Preference
+		// NOTE: Ensure database.GetOriginRecord is defined in mongo.go
+		record, err := database.GetOriginRecord(client, incomingHost)
 
-		if err == nil && originIP != "" {
-			rawTarget := originIP
-			// Basic heuristic to add scheme if missing
-			if len(rawTarget) < 4 || rawTarget[:4] != "http" {
-				rawTarget = "https://" + rawTarget
+		if err == nil && record != nil {
+			rawTarget := record.Content
+			
+			// DYNAMIC SCHEME SELECTION
+			// If user set "origin_ssl: true" -> Use HTTPS
+			// If not set (false) -> Use HTTP (Legacy behavior)
+			if record.OriginSSL {
+				if len(rawTarget) < 4 || rawTarget[:4] != "http" {
+					rawTarget = "https://" + rawTarget
+				}
+			} else {
+				if len(rawTarget) < 4 || rawTarget[:4] != "http" {
+					rawTarget = "http://" + rawTarget
+				}
 			}
+
 			targetURL, _ = url.Parse(rawTarget)
-			log.Printf("[Proxy] Routing %s -> %s", incomingHost, rawTarget)
+			log.Printf("[Proxy] Routing %s -> %s (SSL: %v)", incomingHost, rawTarget, record.OriginSSL)
 		} else {
-			// Fallback if no user record exists (e.g. before they add an A record)
+			// Fallback if no user record exists
 			targetURL, _ = url.Parse(defaultOrigin)
 			log.Printf("[Proxy] No user record found for %s, using default: %s", incomingHost, defaultOrigin)
 		}
@@ -126,24 +137,25 @@ func main() {
 	}
 
 	// --- DEFINE THE PROXY WITH ERROR HANDLER ---
-proxy := &httputil.ReverseProxy{
-        Director: director,
-        ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-            log.Printf("🔥 Proxy Error for %s: %v", r.Host, err)
+	proxy := &httputil.ReverseProxy{
+		Director: director,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("🔥 Proxy Error for %s: %v", r.Host, err)
 
-            if r.Context().Err() != nil {
-                return
-            }
+			if r.Context().Err() != nil {
+				return
+			}
 
-            w.WriteHeader(http.StatusBadGateway)
-            w.Header().Set("Content-Type", "text/html")
-            w.Write(page502)
-        },
-        // [NEW] Add this Transport block to skip SSL verification for the backend
-        Transport: &http.Transport{
-            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-        },
-    }
+			w.WriteHeader(http.StatusBadGateway)
+			w.Header().Set("Content-Type", "text/html")
+			w.Write(page502)
+		},
+		// [CRITICAL] Skip SSL verification for Backend
+		// We trust our backend IP even if the cert doesn't match the IP address.
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 
 	// 6. INIT API HANDLER
 	apiHandler := api.NewAPIHandler(client, proxy, rateLimiter, mlURL, defaultOrigin, wafPublicIP, page404)
@@ -179,7 +191,6 @@ proxy := &httputil.ReverseProxy{
 		}
 
 		// 2. Allow User Domains & Subdomains
-		// CHANGED: Now uses IsHostAllowed to check both Domains and DNS Records
 		if database.IsHostAllowed(client, host) {
 			return nil
 		}
