@@ -78,11 +78,14 @@ func (h *APIHandler) WriteJSONError(w http.ResponseWriter, message string, code 
 }
 
 // ReloadRules: Merges Rules and Updates Domain Cache
+// ... (lines 1-76 remain the same)
+
+// ReloadRules: Merges Rules and Updates Domain Cache
 func (h *APIHandler) ReloadRules() {
 	h.rulesMutex.Lock()
 	defer h.rulesMutex.Unlock()
 
-	// 1. Fetch All Data
+	// 1. Fetch All Data (Keep this as is, so we get everything)
 	allRules, err := database.GetRules(h.MongoClient, bson.M{})
 	if err != nil {
 		log.Printf("[ERROR] ReloadRules: Failed to load rules: %v", err)
@@ -99,10 +102,14 @@ func (h *APIHandler) ReloadRules() {
 		return
 	}
 
-	// 2. [NEW] Update Domain Map Cache
+	// 2. [FIXED] Update Domain Map Cache
+	// CRITICAL: We only load "active" domains into the WAF runtime map.
+	// This prevents a "pending" duplicate from overwriting a valid "active" domain.
 	newDomainMap := make(map[string]detector.Domain)
 	for _, d := range domains {
-		newDomainMap[d.Name] = d
+		if d.Status == "active" {
+			newDomainMap[d.Name] = d
+		}
 	}
 	h.domainMap = newDomainMap
 
@@ -128,6 +135,12 @@ func (h *APIHandler) ReloadRules() {
 	newDomainRules := make(map[string][]detector.WAFRule)
 
 	for _, d := range domains {
+		// [FIXED] Skip pending domains here too.
+		// We don't want to build rules for domains that aren't verified.
+		if d.Status != "active" {
+			continue
+		}
+
 		var effective []detector.WAFRule
 		// A. Global Rules
 		for _, r := range globalRules {
@@ -149,9 +162,10 @@ func (h *APIHandler) ReloadRules() {
 	h.domainRules = newDomainRules
 	h.globalFallback = globalRules
 
-	log.Printf("♻️  Rules Reloaded. Configured %d domains.", len(h.domainRules))
+	log.Printf("♻️  Rules Reloaded. Configured %d active domains.", len(h.domainRules))
 }
 
+// ... (rest of file remains the same)
 
 func isEnabled(ruleID, domainID string, policies map[policyKey]bool, def bool) bool {
 	if status, exists := policies[policyKey{RuleID: ruleID, DomainID: domainID}]; exists {
