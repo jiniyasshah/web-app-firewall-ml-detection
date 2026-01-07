@@ -91,7 +91,7 @@ def dissect_payload(path, body, headers):
             key_lower = k.lower()
             
             # 1. Skip standard noisy headers
-            if key_lower in ["host", "accept", "connection", "accept-encoding", "content-length", "upgrade-insecure-requests"]:
+            if key_lower in ["host", "accept", "connection", "accept-encoding", "accept-language", "content-length", "upgrade-insecure-requests"]:
                 continue
             
             # 2. Skip Browser Fingerprinting Headers (Save CPU & reduce noise)
