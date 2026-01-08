@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Direct IP Access | Minishield WAF</title>
+    <style>
+      body {
+        background-color: #0f172a;
+        color: #e2e8f0;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        margin: 0;
+      }
+      .container {
+        text-align: center;
+        max-width: 600px;
+        padding: 2rem;
+        border: 1px solid #1e293b;
+        border-radius: 12px;
+        background: #1e293b;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        color: #f43f5e;
+        margin-bottom: 1rem;
+      }
+      p {
+        color: #94a3b8;
+        margin-bottom: 2rem;
+        line-height: 1.5;
+      }
+      .code {
+        background: #0f172a;
+        padding: 0.5rem;
+        border-radius: 4px;
+        font-family: monospace;
+        color: #38bdf8;
+      }
+      .footer {
+        margin-top: 2rem;
+        font-size: 0.875rem;
+        color: #64748b;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Domain Not Configured</h1>
+      <p>
+        You've requested a page on a website (<code
+          ><span id="domain"></span></code
+        >) that is on the Minishield network, but the host is not configured for
+        this request.
+      </p>
+      <p>
+        If you are the site owner, please log in to your dashboard and ensure
+        this domain is added to your project.
+      </p>
+      <div class="footer">Error Code: 1001 • Minishield WAF</div>
+    </div>
+    <script>
+      document.getElementById("domain").innerText = window.location.hostname;
+    </script>
+  </body>
+</html>

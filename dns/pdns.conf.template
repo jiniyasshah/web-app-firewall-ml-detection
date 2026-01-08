@@ -1,0 +1,10 @@
+launch=gmysql
+gmysql-host=${DNS_DB_HOST}
+gmysql-user=${DNS_DB_USER}
+gmysql-password=${DNS_DB_PASSWORD}
+gmysql-dbname=${DNS_DB_NAME}
+gmysql-dnssec=no
+
+daemon=no
+guardian=no
+loglevel=5

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Service Unavailable | Minishield WAF</title>
+    <style>
+      body {
+        background-color: #0f172a;
+        color: #e2e8f0;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        margin: 0;
+      }
+      .container {
+        text-align: center;
+        max-width: 600px;
+        padding: 2rem;
+        border: 1px solid #1e293b;
+        border-radius: 12px;
+        background: #1e293b;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        color: #fbbf24;
+        margin-bottom: 1rem;
+      }
+      p {
+        color: #94a3b8;
+        margin-bottom: 2rem;
+        line-height: 1.5;
+      }
+      .error-details {
+        background: #0f172a;
+        padding: 1rem;
+        border-radius: 4px;
+        font-family: monospace;
+        color: #f87171;
+        font-size: 0.9rem;
+        text-align: left;
+        margin-top: 1.5rem;
+      }
+      .footer {
+        margin-top: 2rem;
+        font-size: 0.875rem;
+        color: #64748b;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Origin Server Unreachable</h1>
+      <p>
+        The Minishield WAF could not connect to the origin server for
+        <code><span id="domain"></span></code>.
+      </p>
+      <p>
+        If you are the site owner, please check if your server is online and
+        accepting connections on port 80/443.
+      </p>
+
+      <div class="error-details">
+        Error: 502 Bad Gateway<br />
+        Upstream: Connection Refused
+      </div>
+
+      <div class="footer">
+        Reference: Minishield-Proxy • <span id="time"></span>
+      </div>
+    </div>
+    <script>
+      document.getElementById("domain").innerText = window.location.hostname;
+      document.getElementById("time").innerText = new Date().toISOString();
+    </script>
+  </body>
+</html>

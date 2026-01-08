@@ -1,0 +1,98 @@
+services:
+  # ----------------------------------------------------------------
+  # 1. CORE WAF SERVICES
+  # ----------------------------------------------------------------
+
+  go_gateway:
+    build: ./gateway
+    container_name: go_gateway
+    ports:
+      - "80:80" # Changed from 8080. Required for Let's Encrypt validation.
+      - "443:443" # New. Required for HTTPS.
+    depends_on:
+      dns_db:
+        condition: service_healthy
+    environment:
+      - MONGO_URI=${MONGO_URI}
+      - ML_URL=http://ml_scorer:8000/predict
+      - DNS_DB_HOST=dns_db
+      - DNS_DB_USER=${DNS_DB_USER:-pdns}
+      - DNS_DB_PASS=${DNS_DB_PASSWORD:-pdns_password}
+      - DNS_DB_NAME=${DNS_DB_NAME:-powerdns}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - WAF_PUBLIC_IP=${WAF_PUBLIC_IP:-64.227.156.70}
+      - JWT_SECRET=${JWT_SECRET:-super_secret_waf_key_change_me}
+    volumes:
+      - certs_volume:/app/certs # Persist SSL certificates so they survive restarts!
+    networks:
+      - waf_net
+
+  ml_scorer:
+    build: ./ml_scorer
+    container_name: ml_scorer
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_PATH=/app/waf_model.pkl
+    networks:
+      - waf_net
+
+  dns_db:
+    image: mariadb:10.11
+    container_name: dns_sql_db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DNS_DB_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${DNS_DB_NAME:-powerdns}
+      MYSQL_USER: ${DNS_DB_USER:-pdns}
+      MYSQL_PASSWORD: ${DNS_DB_PASSWORD:-pdns_password}
+    volumes:
+      - ./dns/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - dns_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mariadb-admin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p${DNS_DB_ROOT_PASSWORD:-root_password}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - waf_net
+
+  pdns_server:
+    build: ./dns
+    container_name: pdns_server
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "8081:8081"
+    depends_on:
+      dns_db:
+        condition: service_healthy
+    environment:
+      - DNS_DB_HOST=dns_db
+      - DNS_DB_USER=${DNS_DB_USER:-pdns}
+      - DNS_DB_PASSWORD=${DNS_DB_PASSWORD:-pdns_password}
+      - DNS_DB_NAME=${DNS_DB_NAME:-powerdns}
+    restart: unless-stopped
+    networks:
+      - waf_net
+
+  # ----------------------------------------------------------------
+  # REMOVED NGINX - The Go Gateway now handles SSL directly
+  # ----------------------------------------------------------------
+
+volumes:
+  dns_data:
+  certs_volume:
+
+networks:
+  waf_net:
+    driver: bridge
