@@ -37,7 +37,7 @@ func (s *NotificationService) SendSignupVerification(email, name, token string) 
 	subject := "Action Required: Verify your MiniShield Account"
 
 	// [IMPORTANT] Link points to the BACKEND API first for verification
-	verifyLink := fmt.Sprintf("https://api.minishield.tech/api/auth/verify?token=%s", token)
+	verifyLink := fmt.Sprintf("https://minishield.tech/api/auth/verify?token=%s", token)
 
 	// 1. HTML Version (Visual)
 	htmlBody := fmt.Sprintf(`
