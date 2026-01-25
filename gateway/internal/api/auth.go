@@ -139,7 +139,6 @@ func (h *AuthHandler) Middleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
-	// Expecting /api/auth/verify?token=123456789
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		utils.WriteError(w, "Missing verification token", http.StatusBadRequest)
@@ -151,6 +150,8 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Redirect user to the frontend login page with a success query param
-	http.Redirect(w, r, h.Service.Cfg.FrontendURL+"/login?verified=true", http.StatusSeeOther)
+	// [UPDATED] Return JSON Success instead of Redirect
+	utils.WriteSuccess(w, map[string]string{
+		"message": "Email verified successfully",
+	}, http.StatusOK)
 }
