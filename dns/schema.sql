@@ -19,22 +19,23 @@ CREATE INDEX catalog_idx ON domains(catalog);
 
 
 CREATE TABLE IF NOT EXISTS records (
-  id                    BIGINT AUTO_INCREMENT,
+  id                    INT AUTO_INCREMENT PRIMARY KEY,
   domain_id             INT DEFAULT NULL,
   name                  VARCHAR(255) DEFAULT NULL,
   type                  VARCHAR(10) DEFAULT NULL,
-  content               TEXT DEFAULT NULL,
+  content               VARCHAR(64000) DEFAULT NULL,
   ttl                   INT DEFAULT NULL,
   prio                  INT DEFAULT NULL,
+  change_date           INT DEFAULT NULL,
   disabled              TINYINT(1) DEFAULT 0,
   ordername             VARCHAR(255) BINARY DEFAULT NULL,
   auth                  TINYINT(1) DEFAULT 1,
-  PRIMARY KEY (id)
+  created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT domain_exists FOREIGN KEY(domain_id) REFERENCES domains(id) ON DELETE CASCADE,
+  INDEX nametype_index (name,type),
+  INDEX domain_id (domain_id),
+  INDEX recordorder (domain_id, ordername)
 ) Engine=InnoDB CHARACTER SET 'latin1';
-
-CREATE INDEX nametype_index ON records(name,type);
-CREATE INDEX domain_id ON records(domain_id);
-CREATE INDEX ordername ON records (ordername);
 
 
 CREATE TABLE IF NOT EXISTS supermasters (

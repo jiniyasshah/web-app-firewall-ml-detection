@@ -97,6 +97,10 @@ def dissect_payload(path, body, headers):
             # 2. Skip Browser Fingerprinting Headers (Save CPU & reduce noise)
             if key_lower.startswith("sec-ch-ua") or key_lower.startswith("sec-fetch"):
                 continue
+            
+            # 2. Skip Cloudflare Fingerprinting Headers (Save CPU & reduce noise)
+            if key_lower.startswith("cf-") or key_lower.startswith("cdn-"):
+                continue          
 
             # 3. Skip Cache/Priority
             if key_lower in ["priority", "cache-control", "pragma"]:

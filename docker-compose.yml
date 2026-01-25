@@ -7,22 +7,24 @@ services:
     build: ./gateway
     container_name: go_gateway
     ports:
-      - "80:80" # Changed from 8080. Required for Let's Encrypt validation.
-      - "443:443" # New. Required for HTTPS.
+      - "${GATEWAY_HTTP_PORT}:80"
+      - "${GATEWAY_HTTPS_PORT}:443"
     depends_on:
       dns_db:
         condition: service_healthy
     environment:
       - MONGO_URI=${MONGO_URI}
-      - ML_URL=http://ml_scorer:8000/predict
-      - DNS_DB_HOST=dns_db
-      - DNS_DB_USER=pdns
-      - DNS_DB_PASS=pdns_password
-      - DNS_DB_NAME=powerdns
+      - ML_URL=${ML_SCORER_URL}
+      - DNS_DB_HOST=${DNS_DB_HOST}
+      - DNS_DB_USER=${DNS_DB_USER}
+      - DNS_DB_PASS=${DNS_DB_PASS}
+      - DNS_DB_NAME=${DNS_DB_NAME}
       - FRONTEND_URL=${FRONTEND_URL}
-      - WAF_PUBLIC_IP=64.227.156.70 # Add your Droplet IP here
+      - WAF_PUBLIC_IP=${WAF_PUBLIC_IP}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
     volumes:
-      - ./certs:/app/certs # Persist SSL certificates so they survive restarts!
+      - certs_data:/app/certs
     networks:
       - waf_net
 
@@ -30,22 +32,22 @@ services:
     build: ./ml_scorer
     container_name: ml_scorer
     ports:
-      - "8000:8000"
+      - "${ML_PORT}:8000"
     environment:
-      - MODEL_PATH=/app/model.pkl
+      - MODEL_PATH=${MODEL_FILE_PATH}
     networks:
       - waf_net
 
   dns_db:
-    image: mariadb:10.11
+    image: ${MARIADB_IMAGE}
     container_name: dns_sql_db
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: powerdns
-      MYSQL_USER: pdns
-      MYSQL_PASSWORD: pdns_password
+      MYSQL_ROOT_PASSWORD: ${DNS_DB_ROOT_PASS}
+      MYSQL_DATABASE: ${DNS_DB_NAME}
+      MYSQL_USER: ${DNS_DB_USER}
+      MYSQL_PASSWORD: ${DNS_DB_PASS}
     volumes:
-      - ./dns/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ${SCHEMA_HOST_PATH}:/docker-entrypoint-initdb.d/schema.sql
       - dns_data:/var/lib/mysql
     healthcheck:
       test:
@@ -57,7 +59,7 @@ services:
           "localhost",
           "-u",
           "root",
-          "-proot_password",
+          "-p${DNS_DB_ROOT_PASS}",
         ]
       interval: 5s
       timeout: 5s
@@ -66,27 +68,24 @@ services:
       - waf_net
 
   pdns_server:
-    image: powerdns/pdns-auth-48:4.8.0
+    image: ${PDNS_IMAGE}
     container_name: pdns_server
     ports:
-      - "53:53/udp"
-      - "53:53/tcp"
-      - "8081:8081"
+      - "${PDNS_PORT}:53/udp"
+      - "${PDNS_PORT}:53/tcp"
+      - "${PDNS_API_PORT}:8081"
     depends_on:
       dns_db:
         condition: service_healthy
     volumes:
-      - ./dns/pdns.conf:/etc/powerdns/pdns.conf
+      - ${PDNS_CONF_HOST_PATH}:/etc/powerdns/pdns.conf
     restart: unless-stopped
     networks:
       - waf_net
 
-  # ----------------------------------------------------------------
-  # REMOVED NGINX - The Go Gateway now handles SSL directly
-  # ----------------------------------------------------------------
-
 volumes:
   dns_data:
+  certs_data:
 
 networks:
   waf_net:

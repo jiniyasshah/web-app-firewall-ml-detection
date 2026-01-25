@@ -4,208 +4,132 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"time"
-	"web-app-firewall-ml-detection/internal/database"
-	"web-app-firewall-ml-detection/internal/detector"
+
+	"web-app-firewall-ml-detection/internal/models"
+	"web-app-firewall-ml-detection/internal/service"
+	"web-app-firewall-ml-detection/internal/utils"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
 )
 
-// JWT Secret (Use os.Getenv in production)
-var JWTSecret = []byte("super_secret_waf_key_change_me")
-
-func (h *APIHandler) Register(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Use UserInput for decoding the request
-	var input detector.UserInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		h.WriteJSONError(w, "Invalid JSON Body", http.StatusBadRequest)
-		return
-	}
-
-	// Basic Validation
-	if input.Email == "" || input.Password == "" || input.Name == "" {
-		h.WriteJSONError(w, "Name, Email and Password are required", http.StatusBadRequest)
-		return
-	}
-
-	// Hash Password
-	hashed, err := bcrypt.GenerateFromPassword([]byte(input.Password), 10)
-	if err != nil {
-		h.WriteJSONError(w, "Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// Create User struct for database
-	user := detector.User{
-		Name:     input.Name,
-		Email:    input.Email,
-		Password: string(hashed),
-	}
-
-	// Save to DB
-	if err := database.CreateUser(h.MongoClient, user); err != nil {
-		h.WriteJSONError(w, "Registration failed:  "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"message":  "User registered successfully"})
+type AuthHandler struct {
+	Service *service.AuthService
 }
 
-func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.WriteJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func NewAuthHandler(s *service.AuthService) *AuthHandler {
+	return &AuthHandler{Service: s}
+}
 
-	// Use UserInput instead of User
-	var input detector.UserInput
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+	var input models.UserInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		h.WriteJSONError(w, "Invalid JSON Body", http.StatusBadRequest)
+		utils.WriteError(w, "Invalid input", http.StatusBadRequest)
+		return
+	}
+	if err := h.Service.Register(input); err != nil {
+		utils.WriteError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	utils.WriteMessage(w, "User registered successfully", http.StatusCreated)
+}
+
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	var input models.UserInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		utils.WriteError(w, "Invalid input", http.StatusBadRequest)
 		return
 	}
 
-	user, err := database.GetUserByEmail(h.MongoClient, input.Email)
+	token, user, err := h.Service.Login(input.Email, input.Password)
 	if err != nil {
-		h.WriteJSONError(w, "Invalid email or password", http.StatusUnauthorized)
+		utils.WriteError(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
-		h.WriteJSONError(w, "Invalid email or password", http.StatusUnauthorized)
-		return
-	}
-
-	// Generate JWT
-	expiration := time.Now().Add(24 * time.Hour)
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id":  user.ID,
-		"email":   user.Email,
-		"exp":     expiration.Unix(),
-	})
-
-	tokenString, err := token.SignedString(JWTSecret)
-	if err != nil {
-		h.WriteJSONError(w, "Failed to generate token", http.StatusInternalServerError)
-		return
-	}
-
-	// Determine if we are in Production
-	isProd := os.Getenv("APP_ENV") == "production"
-
-	// Dynamic Domain Logic:
-	// - Prod: ".minishield.tech" (Allows cookie sharing between api. and www.)
-	// - Dev:  "" (Empty string defaults to "Host Only", required for localhost)
 	cookieDomain := ""
-	if isProd {
+	if h.Service.Cfg.AppEnv == "production" {
 		cookieDomain = ".minishield.tech"
 	}
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
-		Value:    tokenString,
-		Expires:  expiration,
+		Value:    token,
+		Expires:  time.Now().Add(24 * time.Hour),
 		HttpOnly: true,
 		Path:     "/",
-		
-		// Dynamic Settings
 		Domain:   cookieDomain,
-		Secure:   true,               // True in Prod (HTTPS), False in Dev (HTTP)
-		SameSite: http.SameSiteNoneMode, // Lax is best for normal navigation
+		Secure:   true,
+		SameSite: http.SameSiteNoneMode,
 	})
 
-	// Return User Info
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	utils.WriteSuccess(w, map[string]interface{}{
 		"message": "Login successful",
-		"user":  map[string]string{
-			"id":    user.ID,
-			"name":  user.Name,
-			"email": user.Email,
-		},
-	})
+		"user":    user,
+	}, http.StatusOK)
 }
 
-func (h *APIHandler) CheckAuth(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	cookieDomain := ""
+	if h.Service.Cfg.AppEnv == "production" {
+		cookieDomain = ".minishield.tech"
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		Path:     "/",
+		Domain:   cookieDomain,
+		Secure:   true,
+		SameSite: http.SameSiteNoneMode,
+	})
+	utils.WriteMessage(w, "Logged out", http.StatusOK)
+}
+
+func (h *AuthHandler) CheckAuth(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value("user_id").(string)
 	if !ok {
-		h.WriteJSONError(w, "Server Error", http.StatusInternalServerError)
+		utils.WriteError(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	// Fetch full user details to get the Name
-	user, err := database.GetUserByID(h.MongoClient, userID)
-	userName := "Unknown"
-	if err == nil {
-		userName = user.Name
+	user, err := h.Service.GetUser(userID)
+	if err != nil {
+		utils.WriteError(w, "User not found", http.StatusNotFound)
+		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	utils.WriteSuccess(w, map[string]interface{}{
 		"authenticated": true,
-		"user": map[string]string{
-			"id":   userID,
-			"name": userName,
-		},
-	})
+		"user":          user,
+	}, http.StatusOK)
 }
 
-func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func (h *AuthHandler) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("auth_token")
 		if err != nil {
-			// MANUAL JSON ERROR RESPONSE
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status":  "error",
-				"message": "Unauthorized: No session cookie",
-			})
+			utils.WriteError(w, "Unauthorized: No session cookie", http.StatusUnauthorized)
 			return
 		}
 
 		token, err := jwt.Parse(cookie.Value, func(token *jwt.Token) (interface{}, error) {
-			return JWTSecret, nil
+			return []byte(h.Service.Cfg.JWTSecret), nil
 		})
 
 		if err != nil || !token.Valid {
-			// MANUAL JSON ERROR RESPONSE
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status":  "error",
-				"message": "Unauthorized: Invalid token",
-			})
+			utils.WriteError(w, "Unauthorized: Invalid token", http.StatusUnauthorized)
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			// MANUAL JSON ERROR RESPONSE
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status":  "error",
-				"message": "Unauthorized: Invalid claims",
-			})
+			utils.WriteError(w, "Unauthorized: Invalid claims", http.StatusUnauthorized)
 			return
 		}
 
 		userID, ok := claims["user_id"].(string)
 		if !ok {
-			// MANUAL JSON ERROR RESPONSE
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status":  "error",
-				"message": "Unauthorized",
-			})
+			utils.WriteError(w, "Unauthorized: Invalid user ID", http.StatusUnauthorized)
 			return
 		}
 
@@ -214,32 +138,19 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
-    // 1. Determine Environment (MUST match Login logic)
-    isProd := os.Getenv("APP_ENV") == "production"
+func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	// Expecting /api/auth/verify?token=123456789
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		utils.WriteError(w, "Missing verification token", http.StatusBadRequest)
+		return
+	}
 
-    cookieDomain := ""
-    if isProd {
-        cookieDomain = ".minishield.tech"
-    }
+	if err := h.Service.VerifyEmail(token); err != nil {
+		utils.WriteError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
-    // 2. Clear the Cookie
-    // We set the same Name, Path, Domain, Secure, and HttpOnly attributes.
-    // We only change Value to "" and Expires to a past date.
-    http.SetCookie(w, &http.Cookie{
-        Name:     "auth_token",
-        Value:    "",              // Empty value
-        Expires:  time.Unix(0, 0), // Expire immediately (1970)
-        
-        // These MUST match what you set in Login:
-        HttpOnly: true,
-        Path:     "/",
-        Domain:   cookieDomain,    // Crucial: Match the domain!
-        Secure:   true,         // Crucial: Match the Secure flag!
-        SameSite: http.SameSiteLaxMode,
-		
-    })
-
-    w.WriteHeader(http.StatusOK)
-    json.NewEncoder(w).Encode(map[string]string{"message": "Logged out"})
+	// Redirect user to the frontend login page with a success query param
+	http.Redirect(w, r, h.Service.Cfg.FrontendURL+"/login?verified=true", http.StatusSeeOther)
 }

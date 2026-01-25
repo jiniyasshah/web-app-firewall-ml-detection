@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"web-app-firewall-ml-detection/internal/detector" // Imported and USED now
+	"web-app-firewall-ml-detection/internal/models" // Imported and USED now
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -15,24 +15,24 @@ import (
 )
 
 // [DELETED] FullRequest and AttackLog structs are removed from here.
-// They are now imported from "web-app-firewall-ml-detection/internal/detector"
+// They are now imported from "web-app-firewall-ml-detection/internal/models"
 
 var logCollection *mongo.Collection
 
-// [UPDATED] Use detector.AttackLog
-var broadcast = make(chan detector.AttackLog, 100)
+// [UPDATED] Use models.AttackLog
+var broadcast = make(chan models.AttackLog, 100)
 
 func Init(client *mongo.Client, dbName string) {
 	logCollection = client.Database(dbName).Collection("logs")
 }
 
-// [UPDATED] Use detector.AttackLog
-func GetBroadcastChannel() chan detector.AttackLog {
+// [UPDATED] Use models.AttackLog
+func GetBroadcastChannel() chan models.AttackLog {
 	return broadcast
 }
 
-// [UPDATED] Use detector.AttackLog
-func GetRecentLogs(limit int64) ([]detector.AttackLog, error) {
+// [UPDATED] Use models.AttackLog
+func GetRecentLogs(limit int64) ([]models.AttackLog, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -44,16 +44,16 @@ func GetRecentLogs(limit int64) ([]detector.AttackLog, error) {
 	}
 	defer cursor.Close(ctx)
 
-	var logs []detector.AttackLog
+	var logs []models.AttackLog
 	if err = cursor.All(ctx, &logs); err != nil {
 		return nil, err
 	}
 	return logs, nil
 }
 
-// [UPDATED] Use detector.FullRequest and detector.AttackLog
-func LogAttack(userID, domainID, ip, path, reason, action, source string, tags []string, score int, confidence float64, fullReq detector.FullRequest, trigger string) {
-	entry := detector.AttackLog{
+// [UPDATED] Use models.FullRequest and models.AttackLog
+func LogAttack(userID, domainID, ip, path, reason, action, source string, tags []string, score int, confidence float64, fullReq models.FullRequest, trigger string) {
+	entry := models.AttackLog{
 		UserID:         userID,
 		DomainID:       domainID,
 		Timestamp:      time.Now(),

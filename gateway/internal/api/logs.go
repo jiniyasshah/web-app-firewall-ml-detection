@@ -1,5 +1,3 @@
-// type: uploaded file
-// fileName: jiniyasshah/web-app-firewall-ml-detection/web-app-firewall-ml-detection-test/gateway/internal/api/logs.go
 package api
 
 import (
@@ -10,12 +8,22 @@ import (
 
 	"web-app-firewall-ml-detection/internal/database"
 	"web-app-firewall-ml-detection/internal/logger"
+	"web-app-firewall-ml-detection/internal/utils"
+
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func (h *APIHandler) SecuredLogsHandler(w http.ResponseWriter, r *http.Request) {
+type LogHandler struct {
+	MongoClient *mongo.Client
+}
+
+func NewLogHandler(client *mongo.Client) *LogHandler {
+	return &LogHandler{MongoClient: client}
+}
+
+func (h *LogHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id").(string)
 
-	// 1. Parse Query Params
 	query := r.URL.Query()
 	domainID := query.Get("domain_id")
 	
@@ -27,7 +35,6 @@ func (h *APIHandler) SecuredLogsHandler(w http.ResponseWriter, r *http.Request) 
 	limit, _ := strconv.ParseInt(limitStr, 10, 64)
 	if limit < 1 { limit = 20 }
 
-	// 2. Fetch Logs via Database Helper
 	filter := database.LogFilter{
 		UserID:   userID,
 		DomainID: domainID,
@@ -37,21 +44,26 @@ func (h *APIHandler) SecuredLogsHandler(w http.ResponseWriter, r *http.Request) 
 
 	result, err := database.GetLogs(h.MongoClient, filter)
 	if err != nil {
-		h.WriteJSONError(w, "Failed to fetch logs: " + err.Error(), http.StatusInternalServerError)
+		utils.WriteError(w, "Failed to fetch logs: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 3. Return Standardized JSON
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	utils.WriteSuccess(w, result, http.StatusOK)
 }
 
-func (h *APIHandler) SSEHandler(w http.ResponseWriter, r *http.Request) {
+func (h *LogHandler) SSEHandler(w http.ResponseWriter, r *http.Request) {
+	// SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
 	logsCh := logger.GetBroadcastChannel()
+	
+	// Flush immediately to establish connection
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
 	for {
 		select {
 		case entry := <-logsCh:

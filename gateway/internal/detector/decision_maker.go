@@ -24,11 +24,11 @@ func Decide(ruleScore int, ruleBlock bool, mlAnomaly bool, mlConfidence float64)
 		return Block, "High Risk Rule Score", "Rule Engine"
 	}
 
-	if mlConfidence > 0.75 {
+	if mlConfidence > 0.8 {
 		return Block, "AI/Hybrid Anomaly Detected", "ML Engine"
 	}
 
-	if mlConfidence > 0.60 {
+	if mlConfidence > 0.65 {
 		return Monitor, "Suspicious Activity (Medium Risk)", "ML Engine"
 	}
 
