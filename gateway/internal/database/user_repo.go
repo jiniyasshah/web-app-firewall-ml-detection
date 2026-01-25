@@ -18,7 +18,7 @@ func CreateUser(client *mongo.Client, user models.User) error {
 	var existing models.User
 	err := client.Database(DBName).Collection("users").FindOne(ctx, bson.M{"email": user.Email}).Decode(&existing)
 	if err == nil {
-		return errors.New("email already registered")
+		return errors.New("Email is already registered")
 	}
 
 	if user.ID == "" {
