@@ -58,16 +58,16 @@ func (s *AuthService) Register(input models.UserInput) error {
 func (s *AuthService) Login(email, password string) (string, *models.User, error) {
 	user, err := database.GetUserByEmail(s.Mongo, email)
 	if err != nil {
-		return "", nil, errors.New("invalid credentials")
+		return "", nil, errors.New("Invalid Credentials. Please try again.")
 	}
 
 	// Check Verification Status
 	if !user.IsVerified {
-		return "", nil, errors.New("email not verified. please check your inbox")
+		return "", nil, errors.New("Email not verified. Please check your inbox.")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
-		return "", nil, errors.New("invalid credentials")
+		return "", nil, errors.New("Invalid Credentials. Please try again.")
 	}
 
 	expiration := time.Now().Add(24 * time.Hour)

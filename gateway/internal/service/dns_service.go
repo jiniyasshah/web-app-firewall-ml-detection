@@ -34,7 +34,7 @@ func (s *DNSService) GetRecords(domainID, userID string) ([]models.DNSRecord, er
 		return nil, err
 	}
 	if domain.UserID != userID {
-		return nil, errors.New("unauthorized")
+		return nil, errors.New("Unauthorized to access this domain's records")
 	}
 
 	return database.GetDNSRecords(s.Mongo, domainID)
@@ -49,13 +49,13 @@ func (s *DNSService) AddRecord(req models.DNSRecord, userID string) (*models.DNS
 	// 2. Verify Ownership & Status
 	domain, err := database.GetDomainByID(s.Mongo, req.DomainID)
 	if err != nil {
-		return nil, errors.New("domain not found")
+		return nil, errors.New("Domain not found in database")
 	}
 	if domain.UserID != userID {
-		return nil, errors.New("unauthorized")
+		return nil, errors.New("Unauthorized to add records to this domain")
 	}
 	if domain.Status != "active" {
-		return nil, errors.New("domain must be verified before adding records")
+		return nil, errors.New("Domain must be verified before adding records")
 	}
 
 	// 3. TTL Validation
@@ -75,7 +75,7 @@ func (s *DNSService) AddRecord(req models.DNSRecord, userID string) (*models.DNS
 	recordName := domain.Name
 	if req.Name != "" && req.Name != "@" {
 		if !domainRegex.MatchString(req.Name) {
-			return nil, errors.New("record name contains invalid characters")
+			return nil, errors.New("Record name contains invalid characters")
 		}
 		recordName = req.Name + "." + domain.Name
 	}
@@ -83,7 +83,7 @@ func (s *DNSService) AddRecord(req models.DNSRecord, userID string) (*models.DNS
 	// 6. CNAME Logic Checks
 	if req.Type == "CNAME" {
 		if recordName == domain.Name {
-			return nil, errors.New("root domain (@) cannot be a CNAME record")
+			return nil, errors.New("Root domain (@) cannot be a CNAME record")
 		}
 		target := strings.TrimSuffix(req.Content, ".")
 		if target == recordName {
@@ -128,11 +128,11 @@ func (s *DNSService) UpdateRecord(recordID, userID string, updateReq models.DNSU
 	// 1. Fetch & Verify
 	record, err := database.GetDNSRecordByID(s.Mongo, recordID)
 	if err != nil {
-		return nil, errors.New("record not found")
+		return nil, errors.New("Record not found in database")
 	}
 	domain, err := database.GetDomainByID(s.Mongo, record.DomainID)
 	if err != nil || domain.UserID != userID {
-		return nil, errors.New("unauthorized")
+		return nil, errors.New("Unauthorized to update this record")
 	}
 
 	// --- BRANCH 1: Origin SSL Update ---
@@ -162,7 +162,7 @@ func (s *DNSService) UpdateRecord(recordID, userID string, updateReq models.DNSU
 
 	// B. Delete Old from PowerDNS
 	if err := database.DeletePowerDNSRecordByContent(record.Name, typeToDelete, contentToDelete); err != nil {
-		return nil, fmt.Errorf("failed to delete old DNS entry: %v", err)
+		return nil, fmt.Errorf("Failed to delete old DNS entry: %v", err)
 	}
 
 	// C. Update MongoDB
@@ -172,7 +172,7 @@ func (s *DNSService) UpdateRecord(recordID, userID string, updateReq models.DNSU
 
 	// D. Add New to PowerDNS
 	if err := database.AddPowerDNSRecord(record.Name, record.Type, record.Content, updateReq.Proxied, s.Cfg.WafPublicIP); err != nil {
-		return nil, fmt.Errorf("failed to add new DNS entry: %v", err)
+		return nil, fmt.Errorf("Failed to add new DNS entry: %v", err)
 	}
 
 	return map[string]interface{}{"proxied": updateReq.Proxied}, nil
@@ -182,11 +182,11 @@ func (s *DNSService) DeleteRecord(recordID, userID string) error {
 	// 1. Fetch & Verify
 	record, err := database.GetDNSRecordByID(s.Mongo, recordID)
 	if err != nil {
-		return errors.New("record not found")
+		return errors.New("Record not found in database")
 	}
 	domain, err := database.GetDomainByID(s.Mongo, record.DomainID)
 	if err != nil || domain.UserID != userID {
-		return errors.New("unauthorized")
+		return errors.New("Unauthorized to delete this record")
 	}
 
 	// 2. Determine SQL Content to Delete
@@ -200,7 +200,7 @@ func (s *DNSService) DeleteRecord(recordID, userID string) error {
 
 	// 3. Delete from PowerDNS
 	if err := database.DeletePowerDNSRecordByContent(record.Name, sqlType, sqlContent); err != nil {
-		return fmt.Errorf("backend delete failed: %v", err)
+		return fmt.Errorf("Backend delete failed: %v", err)
 	}
 
 	// 4. Delete from Mongo
@@ -214,23 +214,23 @@ func (s *DNSService) validateContent(rType, content string) error {
 	case "A":
 		ip := net.ParseIP(content)
 		if ip == nil || ip.To4() == nil {
-			return errors.New("content must be a valid IPv4 address")
+			return errors.New("Content must be a valid IPv4 address")
 		}
 	case "AAAA":
 		ip := net.ParseIP(content)
 		if ip == nil || ip.To4() != nil {
-			return errors.New("content must be a valid IPv6 address")
+			return errors.New("Content must be a valid IPv6 address")
 		}
 	case "CNAME":
 		if net.ParseIP(content) != nil {
 			return errors.New("CNAME content must be a domain name, not IP")
 		}
 		if !domainRegex.MatchString(strings.TrimSuffix(content, ".")) {
-			return errors.New("invalid domain format")
+			return errors.New("Invalid domain format")
 		}
 	case "MX", "NS":
 		if !domainRegex.MatchString(strings.TrimSuffix(content, ".")) {
-			return errors.New("invalid domain format")
+			return errors.New("Invalid domain format")
 		}
 	case "TXT":
 		if len(content) > 2048 {
@@ -268,7 +268,7 @@ func (s *DNSService) checkConflicts(domainID, name, rType, content string) error
 			return err
 		}
 		if exists {
-			return errors.New("duplicate record already exists")
+			return errors.New("Duplicate record already exists")
 		}
 	}
 	return nil

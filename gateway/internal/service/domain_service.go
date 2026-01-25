@@ -49,7 +49,7 @@ func (s *DomainService) AddDomain(input models.DomainInput, userID string) (*mod
 	if rootZone != input.Name {
 		existingRoot, err := database.GetDomainByName(s.Mongo, rootZone)
 		if err == nil && existingRoot != nil {
-			return nil, fmt.Errorf("root domain '%s' exists. Please add '%s' as an A Record", rootZone, input.Name)
+			return nil, fmt.Errorf("Root domain '%s' exists. Please add '%s' as an A Record", rootZone, input.Name)
 		}
 	}
 
@@ -86,10 +86,10 @@ func (s *DomainService) VerifyDomainOwner(domainID, userID string) (bool, map[st
 	// 1. Fetch Domain
 	domain, err := database.GetDomainByID(s.Mongo, domainID)
 	if err != nil {
-		return false, nil, errors.New("domain not found")
+		return false, nil, errors.New("Domain not found in database")
 	}
 	if domain.UserID != userID {
-		return false, nil, errors.New("unauthorized")
+		return false, nil, errors.New("Unauthorized to verify this domain")
 	}
 
 	// 2. Check RDAP (The Security Check)
@@ -121,7 +121,7 @@ func (s *DomainService) VerifyDomainOwner(domainID, userID string) (bool, map[st
 
 		err = database.CreateDNSZone(domain.Name, domain.Nameservers)
 		if err != nil {
-			return false, nil, fmt.Errorf("verification passed but DNS provisioning failed: %v", err)
+			return false, nil, fmt.Errorf("Verification passed but DNS provisioning failed: %v", err)
 		}
 
 
@@ -158,7 +158,7 @@ func (s *DomainService) checkRegistrarRDAP(domain string) ([]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("domain not found in registry")
+		return nil, fmt.Errorf("Domain not found in registry")
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -193,25 +193,25 @@ func (s *DomainService) DeleteDomain(domainID, userID string) error {
 	// 1. Fetch & Verify Ownership
 	domain, err := database.GetDomainByID(s.Mongo, domainID)
 	if err != nil {
-		return errors.New("domain not found")
+		return errors.New("Domain not found in database")
 	}
 	if domain.UserID != userID {
-		return errors.New("unauthorized")
+		return errors.New("Unauthorized to delete this domain")
 	}
 
 	// 2. If Active/Verified, Remove from PowerDNS 
 	if domain.Status == "active" {
 		if err := database.DeleteDNSZone(domain.Name); err != nil {
-			return fmt.Errorf("failed to delete from DNS backend: %v", err)
+			return fmt.Errorf("Failed to delete from DNS backend: %v", err)
 		}
 	}
 
 	if err := database.DeleteDNSRecordsByDomainID(s.Mongo, domainID); err != nil {
-		return fmt.Errorf("failed to delete associated records: %v", err)
+		return fmt.Errorf("Failed to delete associated records: %v", err)
 	}
 
 	if err := database.DeleteDomain(s.Mongo, domainID); err != nil {
-		return fmt.Errorf("failed to delete domain: %v", err)
+		return fmt.Errorf("Failed to delete domain: %v", err)
 	}
 
 	return nil
