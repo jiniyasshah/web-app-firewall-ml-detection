@@ -20,7 +20,7 @@ type Config struct {
 
 	//Limits
 	RateLimit     int // Existing per-IP limit
-    DDOSLimit     int // NEW: Per-Domain limit
+    DDOSLimit     int // Per-Domain limit
 
 	// DNS DB
 	DNSUser string
@@ -36,7 +36,9 @@ type Config struct {
     SMTPFrom     string	
 
 	// Security
-	JWTSecret string
+    JWTSecret        string
+    RecaptchaSiteKey string 
+    RecaptchaSecret  string 
 }
 
 func Load() *Config {
@@ -74,6 +76,8 @@ func Load() *Config {
         SMTPPass: getEnv("SMTP_PASS", "app-password"),
 
 		JWTSecret: getEnv("JWT_SECRET", "super_secret_waf_key_change_me"),
+		RecaptchaSiteKey: getEnv("RECAPTCHA_SITE_KEY", ""), 
+        RecaptchaSecret:  getEnv("RECAPTCHA_SECRET", ""),  
 	}
 }
 

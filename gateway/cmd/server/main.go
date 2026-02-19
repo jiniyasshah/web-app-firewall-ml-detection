@@ -56,6 +56,11 @@ func main() {
 		page502 = []byte("502 Bad Gateway")
 	}
 
+	captchaPage, _ := os.ReadFile("pages/captcha.html")
+    if len(captchaPage) == 0 {
+        log.Println("⚠️ Warning: pages/captcha.html not found. DDoS challenges will fail.")
+    }
+
 	// 4. Initialize Services
 	// [UPDATED] Pass notificationService to AuthService
 	authService := service.NewAuthService(mongoClient, cfg, notificationService) 
@@ -66,7 +71,7 @@ func main() {
 
 	// 5. Initialize Proxy
 	reverseProxy := proxy.NewReverseProxy(wafService, page502)
-	wafHandler := proxy.NewWAFHandler(wafService, reverseProxy, rateLimiter, cfg, page404)
+	wafHandler := proxy.NewWAFHandler(wafService, reverseProxy, rateLimiter, cfg, page404, captchaPage)
 	
 	// [NEW] Inject Notifier into WAF Handler for security alerts
 	wafHandler.Notifier = notificationService

@@ -25,6 +25,8 @@ services:
       - RATE_LIMIT=${RATE_LIMIT}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASS=${SMTP_PASS}
+      - RECAPTCHA_SITE_KEY=${RECAPTCHA_SITE_KEY}
+      - RECAPTCHA_SECRET=${RECAPTCHA_SECRET}
     volumes:
       - certs_data:/app/certs
     networks:

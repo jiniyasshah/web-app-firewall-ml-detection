@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Security Check | {{DOMAIN}}</title>
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background: #1a1a1a;
+        color: #fff;
+        margin: 0;
+      }
+      .container {
+        text-align: center;
+        padding: 2rem;
+        border: 1px solid #333;
+        border-radius: 8px;
+        background: #2d2d2d;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+      }
+      h1 {
+        color: #e74c3c;
+        margin-bottom: 10px;
+      }
+      p {
+        color: #ccc;
+        margin-bottom: 20px;
+      }
+      .g-recaptcha {
+        display: inline-block;
+      }
+      button {
+        margin-top: 15px;
+        padding: 10px 20px;
+        cursor: pointer;
+        background: #e74c3c;
+        border: none;
+        color: white;
+        border-radius: 4px;
+        font-weight: bold;
+      }
+      button:hover {
+        background: #c0392b;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🛡️ Security Check</h1>
+      <p>
+        High traffic detected on <strong>{{DOMAIN}}</strong>.<br />Please verify
+        you are human.
+      </p>
+
+      <form action="/_waf/verify" method="POST">
+        <div class="g-recaptcha" data-sitekey="{{SITE_KEY}}"></div>
+        <br />
+        <input type="hidden" name="redirect_to" value="{{REDIRECT_TO}}" />
+        <button type="submit">Verify & Continue</button>
+      </form>
+    </div>
+  </body>
+</html>
