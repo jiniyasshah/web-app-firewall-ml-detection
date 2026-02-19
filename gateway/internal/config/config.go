@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +17,10 @@ type Config struct {
 	OriginURL   string
 	MLURL       string
 	WafPublicIP string
+
+	//Limits
+	RateLimit     int // Existing per-IP limit
+    DDOSLimit     int // NEW: Per-Domain limit
 
 	// DNS DB
 	DNSUser string
@@ -57,6 +62,9 @@ func Load() *Config {
 		MLURL:       getEnv("ML_URL", "http://ml_scorer:8000/predict"),
 		WafPublicIP: getEnv("WAF_PUBLIC_IP", "157.245.100.147"),
 
+		RateLimit: getEnvAsInt("RATE_LIMIT", 100),
+        DDOSLimit: getEnvAsInt("DDOS_LIMIT", 10000),
+
 		DNSUser: getEnv("DNS_DB_USER", "pdns"),
 		DNSPass: getEnv("DNS_DB_PASS", "pdns_password"),
 		DNSHost: getEnv("DNS_DB_HOST", "dns_sql_db"),
@@ -74,4 +82,14 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// Helper for int envs
+func getEnvAsInt(key string, fallback int) int {
+    if value, exists := os.LookupEnv(key); exists {
+        if i, err := strconv.Atoi(value); err == nil {
+            return i
+        }
+    }
+    return fallback
 }

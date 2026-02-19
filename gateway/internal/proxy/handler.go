@@ -31,9 +31,10 @@ type policyKey struct {
 
 type WAFHandler struct {
 	Service     *service.WAFService
-	Notifier    *service.NotificationService // [NEW] Added this field
+	Notifier    *service.NotificationService
 	Proxy       *httputil.ReverseProxy
 	RateLimiter *limiter.RateLimiter
+	DDOSLimiter *limiter.RateLimiter // Tracks Host/Domain name
 	Cfg         *config.Config
 
 	UnconfiguredPage []byte
@@ -50,24 +51,26 @@ type WAFHandler struct {
 }
 
 func NewWAFHandler(svc *service.WAFService, proxy *httputil.ReverseProxy, rl *limiter.RateLimiter, cfg *config.Config, page404 []byte) *WAFHandler {
-	h := &WAFHandler{
-		Service:          svc,
-		Proxy:            proxy,
-		RateLimiter:      rl,
-		Cfg:              cfg,
-		UnconfiguredPage: page404,
-		// Initialize Maps
-		domainRules: make(map[string][]models.WAFRule),
-		domainMap:   make(map[string]models.Domain),
-	}
+  ddosLimiter := limiter.New(cfg.DDOSLimit, 1*time.Minute)
+  h := &WAFHandler{
+    Service:          svc,
+    Proxy:            proxy,
+    RateLimiter:      rl,
+    DDOSLimiter:      ddosLimiter,
+    Cfg:              cfg,
+    UnconfiguredPage: page404,
+    // Initialize Maps
+    domainRules: make(map[string][]models.WAFRule),
+    domainMap:   make(map[string]models.Domain),
+  }
 
-	// Load rules immediately on startup
-	h.ReloadRules()
+  // Load rules immediately on startup
+  h.ReloadRules()
 
-	// Start Background Stats Ticker for RPM calculation
-	go h.startStatsTicker()
+  // Start Background Stats Ticker for RPM calculation
+  go h.startStatsTicker()
 
-	return h
+  return h
 }
 
 // ReloadRules fetches latest config from DB and updates the memory cache
@@ -230,12 +233,20 @@ func getHost(r *http.Request) string {
 func (h *WAFHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	atomic.AddUint64(&h.reqCount, 1)
 	clientIP := getRealIP(r)
+	host := getHost(r)
+
+
 
 	// Buffer Body for Analysis
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	host := getHost(r)
+    if !h.DDOSLimiter.Allow(host) {
+		log.Printf("🔥 DDoS MITIGATION ENABLED | Host: %s is under attack. Dropping request from %s", host, clientIP)
+		w.WriteHeader(http.StatusServiceUnavailable) // 503 Service Unavailable
+		w.Write([]byte("Service Unavailable: Traffic Limit Exceeded"))
+		return
+	}
 
 	// 1. Get Rules & Metadata from MEMORY CACHE
 	h.rulesMutex.RLock()

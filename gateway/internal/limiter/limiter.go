@@ -87,3 +87,21 @@ func (rl *RateLimiter) Allow(ip string) bool {
 func (rl *RateLimiter) IsRateLimited(ip string) bool {
 	return !rl.Allow(ip)
 }
+
+func (rl *RateLimiter) Cleanup(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			rl.mu.Lock()
+			now := time.Now()
+			for ip, status := range rl.clients {
+				// If the window has passed and no new requests came in, delete it
+				// We add a slight buffer (2 * window) to be safe
+				if now.Sub(status.CurrWindowStart) > 2*rl.window {
+					delete(rl.clients, ip)
+				}
+			}
+			rl.mu.Unlock()
+		}
+	}()
+}
