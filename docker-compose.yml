@@ -21,6 +21,8 @@ services:
       - DNS_DB_NAME=${DNS_DB_NAME}
       - FRONTEND_URL=${FRONTEND_URL}
       - WAF_PUBLIC_IP=${WAF_PUBLIC_IP}
+      - DDOS_LIMIT=${DDOS_LIMIT}
+      - RATE_LIMIT=${RATE_LIMIT}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASS=${SMTP_PASS}
     volumes:
