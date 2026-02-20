@@ -21,6 +21,8 @@ type User struct {
 
 	ResetToken       string `bson:"reset_token,omitempty" json:"-"`
 	ResetTokenExpiry int64  `bson:"reset_token_expiry,omitempty" json:"-"`
+
+	TokenVersion int `bson:"token_version" json:"-"`
 }
 
 type UserInput struct {

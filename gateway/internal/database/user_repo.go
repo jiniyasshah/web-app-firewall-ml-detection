@@ -73,14 +73,16 @@ func VerifyUserToken(client *mongo.Client, token string) error {
 	return nil
 }
 
-
 func UpdateUserPassword(client *mongo.Client, userID string, hashedPassword string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
 	_, err := client.Database(DBName).Collection("users").UpdateOne(ctx, 
 		bson.M{"_id": userID}, 
-		bson.M{"$set": bson.M{"password": hashedPassword}},
+		bson.M{
+			"$set": bson.M{"password": hashedPassword},
+			"$inc": bson.M{"token_version": 1}, // [NEW] Invalidates all old tokens!
+		},
 	)
 	return err
 }
@@ -175,3 +177,4 @@ func ConfirmEmailChange(client *mongo.Client, userID, newEmail string) error {
 	)
 	return err
 }
+

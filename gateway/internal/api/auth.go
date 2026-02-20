@@ -133,6 +133,26 @@ func (h *AuthHandler) Middleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		//Token Versioning ---
+		user, err := h.Service.GetUser(userID)
+		if err != nil {
+			utils.WriteError(w, "Unauthorized: User not found", http.StatusUnauthorized)
+			return
+		}
+
+		// JWT stores numbers as float64
+		tokenVersion := 0
+		if tv, ok := claims["token_version"].(float64); ok {
+			tokenVersion = int(tv)
+		}
+
+		// If the DB version is different from the Token version, the password was changed!
+		if user.TokenVersion != tokenVersion {
+			utils.WriteError(w, "Session expired. Please log in again.", http.StatusUnauthorized)
+			return
+		}
+		// ----------------------------------------------------
+
 		ctx := context.WithValue(r.Context(), "user_id", userID)
 		next(w, r.WithContext(ctx))
 	}
