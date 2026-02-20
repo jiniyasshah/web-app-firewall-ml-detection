@@ -176,6 +176,24 @@ func (h *AuthHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 	utils.WriteSuccess(w, map[string]string{"message": "Password updated successfully"}, http.StatusOK)
 }
 
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.Email == "" {
+		utils.WriteError(w, "Invalid input", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.Service.ForgotPassword(input.Email); err != nil {
+		utils.WriteError(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	// Always return success to prevent email enumeration
+	utils.WriteSuccess(w, map[string]string{"message": "If that email exists, a reset link has been sent."}, http.StatusOK)
+}
+
 func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Token       string `json:"token"`

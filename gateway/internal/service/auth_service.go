@@ -94,6 +94,7 @@ func (s *AuthService) GetUser(userID string) (*models.User, error) {
 	return database.GetUserByID(s.Mongo, userID)
 }
 
+
 func (s *AuthService) UpdatePassword(userID, oldPassword, newPassword string) error {
 	user, err := s.GetUser(userID)
 	if err != nil {
