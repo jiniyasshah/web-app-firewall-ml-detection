@@ -8,6 +8,7 @@ import (
 
 	"web-app-firewall-ml-detection/internal/database"
 	"web-app-firewall-ml-detection/internal/logger"
+	"web-app-firewall-ml-detection/internal/models"
 	"web-app-firewall-ml-detection/internal/utils"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -21,34 +22,52 @@ func NewLogHandler(client *mongo.Client) *LogHandler {
 	return &LogHandler{MongoClient: client}
 }
 
+type PaginatedLogsResponse struct {
+	Logs        []models.AttackLog `json:"logs"`
+	Total       int64              `json:"total"`
+	Page        int                `json:"page"`
+	Limit       int                `json:"limit"`
+	TotalPages  int                `json:"total_pages"`
+	TotalEvents int64              `json:"total_events"` // [NEW]
+	Blocked     int64              `json:"blocked"`      // [NEW]
+	Flagged     int64              `json:"flagged"`      // [NEW]
+}
+
 func (h *LogHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(string)
-
-	query := r.URL.Query()
-	domainID := query.Get("domain_id")
-	
-	pageStr := query.Get("page")
-	page, _ := strconv.ParseInt(pageStr, 10, 64)
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 { page = 1 }
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 100 { limit = 20 }
 
-	limitStr := query.Get("limit")
-	limit, _ := strconv.ParseInt(limitStr, 10, 64)
-	if limit < 1 { limit = 20 }
+	// Read new filters from URL
+	domainID := r.URL.Query().Get("domain_id")
+	action := r.URL.Query().Get("action")
+	ip := r.URL.Query().Get("ip")
+	attackType := r.URL.Query().Get("attack_type")
 
-	filter := database.LogFilter{
-		UserID:   userID,
-		DomainID: domainID,
-		Page:     page,
-		Limit:    limit,
-	}
-
-	result, err := database.GetLogs(h.MongoClient, filter)
+	logs, totalFiltered, totalEvents, blocked, flagged, err := database.GetLogs(h.MongoClient, domainID, page, limit, action, ip, attackType)
 	if err != nil {
-		utils.WriteError(w, "Failed to fetch logs: "+err.Error(), http.StatusInternalServerError)
+		utils.WriteError(w, "Failed to fetch logs", http.StatusInternalServerError)
 		return
 	}
 
-	utils.WriteSuccess(w, result, http.StatusOK)
+	totalPages := int(totalFiltered) / limit
+	if int(totalFiltered)%limit != 0 {
+		totalPages++
+	}
+
+	response := PaginatedLogsResponse{
+		Logs:        logs,
+		Total:       totalFiltered,
+		Page:        page,
+		Limit:       limit,
+		TotalPages:  totalPages,
+		TotalEvents: totalEvents, // Include accurate stats
+		Blocked:     blocked,     // Include accurate stats
+		Flagged:     flagged,     // Include accurate stats
+	}
+
+	utils.WriteSuccess(w, response, http.StatusOK)
 }
 
 func (h *LogHandler) SSEHandler(w http.ResponseWriter, r *http.Request) {
