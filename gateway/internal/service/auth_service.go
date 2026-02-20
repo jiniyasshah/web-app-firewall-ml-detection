@@ -93,3 +93,94 @@ func (s *AuthService) VerifyEmail(token string) error {
 func (s *AuthService) GetUser(userID string) (*models.User, error) {
 	return database.GetUserByID(s.Mongo, userID)
 }
+
+func (s *AuthService) UpdateEmail(userID, newEmail string) error {
+	user, err := s.GetUser(userID)
+	if err != nil {
+		return errors.New("user not found")
+	}
+
+	oldEmail := user.Email
+	if oldEmail == newEmail {
+		return errors.New("new email cannot be the same as the old email")
+	}
+
+	if err := database.UpdateUserEmail(s.Mongo, userID, newEmail); err != nil {
+		return err
+	}
+
+	// Notify the old email address for security purposes
+	s.Notifier.SendEmailChangedNotification(oldEmail, newEmail, user.Name)
+	return nil
+}
+
+func (s *AuthService) UpdatePassword(userID, oldPassword, newPassword string) error {
+	user, err := s.GetUser(userID)
+	if err != nil {
+		return errors.New("user not found")
+	}
+
+	// Verify old password
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPassword)); err != nil {
+		return errors.New("incorrect current password")
+	}
+
+	// Hash new password
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), 10)
+	if err != nil {
+		return err
+	}
+
+	if err := database.UpdateUserPassword(s.Mongo, userID, string(hashed)); err != nil {
+		return err
+	}
+
+	s.Notifier.SendPasswordChangedNotification(user.Email, user.Name)
+	return nil
+}
+
+func (s *AuthService) ForgotPassword(email string) error {
+	user, err := database.GetUserByEmail(s.Mongo, email)
+	if err != nil {
+		// Return nil to prevent email enumeration attacks (don't reveal if email exists)
+		return nil 
+	}
+
+	// Generate a simple token (in production, use crypto/rand)
+	token := fmt.Sprintf("%d", time.Now().UnixNano())
+	expiry := time.Now().Add(1 * time.Hour).Unix() // 1 hour expiration
+
+	if err := database.SetPasswordResetToken(s.Mongo, email, token, expiry); err != nil {
+		return err
+	}
+
+	s.Notifier.SendPasswordResetEmail(user.Email, user.Name, token)
+	return nil
+}
+
+func (s *AuthService) ResetPassword(token, newPassword string) error {
+	user, err := database.GetUserByResetToken(s.Mongo, token)
+	if err != nil {
+		return err
+	}
+
+	// Check if token expired
+	if time.Now().Unix() > user.ResetTokenExpiry {
+		return errors.New("reset token has expired")
+	}
+
+	// Hash new password
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), 10)
+	if err != nil {
+		return err
+	}
+
+	// Update password and clear token
+	if err := database.UpdateUserPassword(s.Mongo, user.ID, string(hashed)); err != nil {
+		return err
+	}
+	_ = database.ClearPasswordResetToken(s.Mongo, user.ID)
+
+	s.Notifier.SendPasswordChangedNotification(user.Email, user.Name)
+	return nil
+}

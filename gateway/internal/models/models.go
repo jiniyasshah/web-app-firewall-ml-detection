@@ -14,6 +14,8 @@ type User struct {
 	Password string `bson:"password" json:"-"`
 	IsVerified        bool   `bson:"is_verified" json:"is_verified"`
 	VerificationToken string `bson:"verification_token,omitempty" json:"-"`
+	ResetToken       string `bson:"reset_token,omitempty" json:"-"`
+	ResetTokenExpiry int64  `bson:"reset_token_expiry,omitempty" json:"-"`
 }
 
 type UserInput struct {

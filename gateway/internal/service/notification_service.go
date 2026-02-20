@@ -151,3 +151,99 @@ func (s *NotificationService) NotifyAttack(userID, domainName, attackType, ip st
 		}
 	}()
 }
+
+// SendPasswordResetEmail sends a link to reset the user's password.
+func (s *NotificationService) SendPasswordResetEmail(toEmail, name, token string) {
+	subject := "Action Required: Reset Your MiniShield Password"
+	resetLink := fmt.Sprintf("https://www.minishield.tech/reset-password?token=%s", token)
+
+	htmlBody := fmt.Sprintf(`
+		<div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto;">
+			<div style="background-color: #f4f4f4; padding: 20px; text-align: center;">
+				<h2 style="color: #333; margin:0;">Password Reset Request</h2>
+			</div>
+			<div style="padding: 20px; border: 1px solid #ddd; border-top: none;">
+				<p>Hi %s,</p>
+				<p>We received a request to reset your MiniShield password. Click the button below to set a new password. This link will expire in 1 hour.</p>
+				
+				<div style="text-align: center; margin: 30px 0;">
+					<a href="%s" style="background-color: #e74c3c; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">
+						Reset Password
+					</a>
+				</div>
+
+				<p style="font-size: 13px; color: #666;">
+					Or copy and paste this link into your browser:<br>
+					<a href="%s" style="color: #e74c3c;">%s</a>
+				</p>
+				
+				<p>If you did not request this, please ignore this email. Your password will remain unchanged.</p>
+			</div>
+		</div>
+	`, name, resetLink, resetLink, resetLink)
+
+	textBody := fmt.Sprintf("Hi %s,\n\nWe received a request to reset your password.\n\nPlease reset it by clicking this link:\n%s\n\nIf you didn't request this, please ignore this email.", name, resetLink)
+
+	go func() {
+		if err := s.Mailer.Send(toEmail, subject, htmlBody, textBody, "Minishield Security"); err != nil {
+			log.Printf("[EMAIL ERROR] Failed to send password reset to %s: %v", toEmail, err)
+		} else {
+			log.Printf("✅ Password reset email sent to %s", toEmail)
+		}
+	}()
+}
+
+// SendPasswordChangedNotification sends a confirmation that the password was changed.
+func (s *NotificationService) SendPasswordChangedNotification(toEmail, name string) {
+	subject := "Security Alert: Your MiniShield Password was Changed"
+
+	htmlBody := fmt.Sprintf(`
+		<div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #ddd;">
+			<div style="background-color: #2c3e50; padding: 15px; text-align: center;">
+				<h2 style="color: white; margin: 0;">Password Changed</h2>
+			</div>
+			<div style="padding: 20px;">
+				<p>Hello %s,</p>
+				<p>This is a confirmation that the password for your MiniShield account has just been changed.</p>
+				<p>If you made this change, you can safely ignore this email.</p>
+				<p style="color: #d32f2f; font-weight: bold;">If you did not make this change, please contact our support team immediately or reset your password.</p>
+			</div>
+		</div>
+	`, name)
+
+	textBody := fmt.Sprintf("Hello %s,\n\nThis is a confirmation that your MiniShield password was just changed.\n\nIf you did not make this change, please contact support immediately.", name)
+
+	go func() {
+		if err := s.Mailer.Send(toEmail, subject, htmlBody, textBody, "Minishield Security"); err != nil {
+			log.Printf("[EMAIL ERROR] Failed to send password change notification to %s: %v", toEmail, err)
+		}
+	}()
+}
+
+// SendEmailChangedNotification sends a confirmation to the OLD email address.
+func (s *NotificationService) SendEmailChangedNotification(oldEmail, newEmail, name string) {
+	subject := "Security Alert: Your MiniShield Email was Changed"
+
+	htmlBody := fmt.Sprintf(`
+		<div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #ddd;">
+			<div style="background-color: #2c3e50; padding: 15px; text-align: center;">
+				<h2 style="color: white; margin: 0;">Email Address Updated</h2>
+			</div>
+			<div style="padding: 20px;">
+				<p>Hello %s,</p>
+				<p>This is a confirmation that the email address associated with your MiniShield account has been updated.</p>
+				<p><strong>Old Email:</strong> %s<br><strong>New Email:</strong> %s</p>
+				<p>If you made this change, you can safely ignore this email.</p>
+				<p style="color: #d32f2f; font-weight: bold;">If you did not make this change, please contact our support team immediately.</p>
+			</div>
+		</div>
+	`, name, oldEmail, newEmail)
+
+	textBody := fmt.Sprintf("Hello %s,\n\nYour MiniShield email address has been updated.\nOld Email: %s\nNew Email: %s\n\nIf you did not make this change, please contact support immediately.", name, oldEmail, newEmail)
+
+	go func() {
+		if err := s.Mailer.Send(oldEmail, subject, htmlBody, textBody, "Minishield Security"); err != nil {
+			log.Printf("[EMAIL ERROR] Failed to send email change notification to %s: %v", oldEmail, err)
+		}
+	}()
+}
