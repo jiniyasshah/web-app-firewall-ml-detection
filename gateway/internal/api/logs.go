@@ -43,9 +43,10 @@ func (h *LogHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	domainID := r.URL.Query().Get("domain_id")
 	action := r.URL.Query().Get("action")
 	ip := r.URL.Query().Get("ip")
-	attackType := r.URL.Query().Get("attack_type")
+    source := r.URL.Query().Get("source")
 
-	logs, totalFiltered, totalEvents, blocked, flagged, err := database.GetLogs(h.MongoClient, domainID, page, limit, action, ip, attackType)
+	// [UPDATED] Pass source to GetLogs
+	logs, totalFiltered, totalEvents, blocked, flagged, err := database.GetLogs(h.MongoClient, domainID, page, limit, action, ip, source)
 	if err != nil {
 		utils.WriteError(w, "Failed to fetch logs", http.StatusInternalServerError)
 		return

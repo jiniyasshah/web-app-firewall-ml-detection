@@ -10,35 +10,36 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func GetLogs(client *mongo.Client, domainID string, page, limit int, action, ip, attackType string) ([]models.AttackLog, int64, int64, int64, int64, error) {
+func GetLogs(client *mongo.Client, domainID string, page, limit int, action, ip, source string) ([]models.AttackLog, int64, int64, int64, int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
 	collection := client.Database(DBName).Collection("logs")
 
-	// 1. Base Filter (Domain Only) - Used to calculate the True Global Stats
 	baseFilter := bson.M{}
 	if domainID != "" && domainID != "all" {
 		baseFilter["domain_id"] = domainID
 	}
 
-	// 2. Query Filter - Used to filter the actual table rows
 	queryFilter := bson.M{}
 	for k, v := range baseFilter {
-		queryFilter[k] = v // Copy base filter
+		queryFilter[k] = v 
 	}
 
 	if action != "" && action != "All" {
 		queryFilter["action"] = action
 	}
 	if ip != "" {
-		queryFilter["ip_address"] = bson.M{"$regex": primitive.Regex{Pattern: ip, Options: "i"}}
+		// [FIXED] Changed "ip_address" to "ip" to match your MongoDB schema!
+		queryFilter["ip"] = bson.M{"$regex": primitive.Regex{Pattern: ip, Options: "i"}}
 	}
-	if attackType != "" && attackType != "All" {
-		queryFilter["attack_type"] = bson.M{"$regex": primitive.Regex{Pattern: attackType, Options: "i"}}
+	
+	// [UPDATED] Filter by Source instead of Attack Type
+	if source != "" && source != "All" {
+		queryFilter["source"] = source 
 	}
 
-	// 3. Get Accurate Stats (Independent of the table's search filters)
+	// ... rest of the function remains exactly the same ...
 	totalEvents, _ := collection.CountDocuments(ctx, baseFilter)
 
 	blockedFilter := bson.M{"action": "Blocked"}
@@ -49,7 +50,6 @@ func GetLogs(client *mongo.Client, domainID string, page, limit int, action, ip,
 	for k, v := range baseFilter { flaggedFilter[k] = v }
 	flaggedCount, _ := collection.CountDocuments(ctx, flaggedFilter)
 
-	// 4. Fetch Paginated & Filtered Data for the Table
 	totalFiltered, err := collection.CountDocuments(ctx, queryFilter)
 	if err != nil {
 		return nil, 0, 0, 0, 0, err
@@ -74,6 +74,5 @@ func GetLogs(client *mongo.Client, domainID string, page, limit int, action, ip,
 		logs = []models.AttackLog{}
 	}
 
-	// Return: logs, total_filtered_rows, total_events, blocked_count, flagged_count, error
 	return logs, totalFiltered, totalEvents, blockedCount, flaggedCount, nil
 }
