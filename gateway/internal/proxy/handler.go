@@ -260,7 +260,7 @@ func getHost(r *http.Request) string {
 
 // [NEW] Helper to render the captcha page with dynamic values
 func (h *WAFHandler) serveChallengePage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable) // 503 so search engines don't index
 
 	host := getHost(r)
