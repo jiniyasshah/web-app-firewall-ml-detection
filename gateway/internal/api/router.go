@@ -31,10 +31,11 @@ func NewRouter(
 	mux.HandleFunc("/api/system/status", systemHandler.GetSystemStatus)
 	mux.HandleFunc("/api/auth/check", authHandler.Middleware(authHandler.CheckAuth))
 	mux.HandleFunc("/api/auth/verify", authHandler.VerifyEmail)
-	mux.HandleFunc("/api/auth/email/update", authHandler.Middleware(authHandler.UpdateEmail))
+	mux.HandleFunc("/api/auth/email/update", authHandler.Middleware(authHandler.RequestEmailChange))
+    mux.HandleFunc("/api/auth/email/verify-change", authHandler.VerifyEmailChange)
 	mux.HandleFunc("/api/auth/password/update", authHandler.Middleware(authHandler.UpdatePassword))
-	mux.HandleFunc("/api/auth/password/forgot", authHandler.ForgotPassword) // Public
-	mux.HandleFunc("/api/auth/password/reset", authHandler.ResetPassword)   // Public
+	mux.HandleFunc("/api/auth/password/reset", authHandler.ResetPassword) // Public
+
 
 
 	// --- Domain Routes ---

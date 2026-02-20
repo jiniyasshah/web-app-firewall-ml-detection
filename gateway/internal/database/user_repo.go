@@ -73,22 +73,6 @@ func VerifyUserToken(client *mongo.Client, token string) error {
 	return nil
 }
 
-func UpdateUserEmail(client *mongo.Client, userID string, newEmail string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
-	defer cancel()
-
-	// Check if email already exists for someone else
-	var existing models.User
-	if err := client.Database(DBName).Collection("users").FindOne(ctx, bson.M{"email": newEmail}).Decode(&existing); err == nil {
-		return errors.New("email is already in use")
-	}
-
-	_, err := client.Database(DBName).Collection("users").UpdateOne(ctx, 
-		bson.M{"_id": userID}, 
-		bson.M{"$set": bson.M{"email": newEmail}},
-	)
-	return err
-}
 
 func UpdateUserPassword(client *mongo.Client, userID string, hashedPassword string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
@@ -137,6 +121,57 @@ func ClearPasswordResetToken(client *mongo.Client, userID string) error {
 	_, err := client.Database(DBName).Collection("users").UpdateOne(ctx, 
 		bson.M{"_id": userID}, 
 		bson.M{"$unset": bson.M{"reset_token": "", "reset_token_expiry": ""}},
+	)
+	return err
+}
+
+func SetPendingEmail(client *mongo.Client, userID string, pendingEmail, token string, expiry int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	// Ensure the new email isn't already used by another fully registered user
+	var existing models.User
+	if err := client.Database(DBName).Collection("users").FindOne(ctx, bson.M{"email": pendingEmail}).Decode(&existing); err == nil {
+		return errors.New("this email is already in use by another account")
+	}
+
+	_, err := client.Database(DBName).Collection("users").UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{"$set": bson.M{
+			"pending_email":             pendingEmail,
+			"email_change_token":        token,
+			"email_change_token_expiry": expiry,
+		}},
+	)
+	return err
+}
+
+func GetUserByEmailChangeToken(client *mongo.Client, token string) (*models.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	var user models.User
+	err := client.Database(DBName).Collection("users").FindOne(ctx, bson.M{"email_change_token": token}).Decode(&user)
+	if err != nil {
+		return nil, errors.New("invalid or expired verification link")
+	}
+	return &user, nil
+}
+
+func ConfirmEmailChange(client *mongo.Client, userID, newEmail string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	_, err := client.Database(DBName).Collection("users").UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{
+			"$set": bson.M{"email": newEmail},
+			"$unset": bson.M{
+				"pending_email":             "",
+				"email_change_token":        "",
+				"email_change_token_expiry": "",
+			},
+		},
 	)
 	return err
 }

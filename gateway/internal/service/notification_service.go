@@ -247,3 +247,35 @@ func (s *NotificationService) SendEmailChangedNotification(oldEmail, newEmail, n
 		}
 	}()
 }
+
+func (s *NotificationService) SendEmailChangeVerification(newEmail, name, token string) {
+	subject := "Action Required: Verify your New Email Address"
+	verifyLink := fmt.Sprintf("https://www.minishield.tech/verify-email?token=%s", token)
+
+	htmlBody := fmt.Sprintf(`
+		<div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #ddd;">
+			<div style="background-color: #2c3e50; padding: 15px; text-align: center;">
+				<h2 style="color: white; margin: 0;">Verify New Email</h2>
+			</div>
+			<div style="padding: 20px;">
+				<p>Hello %s,</p>
+				<p>You recently requested to change the email address associated with your MiniShield account to this one.</p>
+				<p>Please click the button below to confirm this change. This link will expire in 1 hour.</p>
+				<div style="text-align: center; margin: 30px 0;">
+					<a href="%s" style="background-color: #3b82f6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+						Verify Email Address
+					</a>
+				</div>
+				<p>If you did not make this request, you can safely ignore this email.</p>
+			</div>
+		</div>
+	`, name, verifyLink)
+
+	textBody := fmt.Sprintf("Hello %s,\n\nPlease verify your new email address by clicking this link:\n%s\n\nIf you did not request this, please ignore this email.", name, verifyLink)
+
+	go func() {
+		if err := s.Mailer.Send(newEmail, subject, htmlBody, textBody, "Minishield Security"); err != nil {
+			log.Printf("[EMAIL ERROR] Failed to send email change verification to %s: %v", newEmail, err)
+		}
+	}()
+}

@@ -14,6 +14,11 @@ type User struct {
 	Password string `bson:"password" json:"-"`
 	IsVerified        bool   `bson:"is_verified" json:"is_verified"`
 	VerificationToken string `bson:"verification_token,omitempty" json:"-"`
+	
+	PendingEmail           string `bson:"pending_email,omitempty" json:"-"`
+	EmailChangeToken       string `bson:"email_change_token,omitempty" json:"-"`
+	EmailChangeTokenExpiry int64  `bson:"email_change_token_expiry,omitempty" json:"-"`
+
 	ResetToken       string `bson:"reset_token,omitempty" json:"-"`
 	ResetTokenExpiry int64  `bson:"reset_token_expiry,omitempty" json:"-"`
 }

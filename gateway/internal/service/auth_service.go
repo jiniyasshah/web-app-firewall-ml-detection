@@ -94,26 +94,6 @@ func (s *AuthService) GetUser(userID string) (*models.User, error) {
 	return database.GetUserByID(s.Mongo, userID)
 }
 
-func (s *AuthService) UpdateEmail(userID, newEmail string) error {
-	user, err := s.GetUser(userID)
-	if err != nil {
-		return errors.New("user not found")
-	}
-
-	oldEmail := user.Email
-	if oldEmail == newEmail {
-		return errors.New("new email cannot be the same as the old email")
-	}
-
-	if err := database.UpdateUserEmail(s.Mongo, userID, newEmail); err != nil {
-		return err
-	}
-
-	// Notify the old email address for security purposes
-	s.Notifier.SendEmailChangedNotification(oldEmail, newEmail, user.Name)
-	return nil
-}
-
 func (s *AuthService) UpdatePassword(userID, oldPassword, newPassword string) error {
 	user, err := s.GetUser(userID)
 	if err != nil {
@@ -182,5 +162,52 @@ func (s *AuthService) ResetPassword(token, newPassword string) error {
 	_ = database.ClearPasswordResetToken(s.Mongo, user.ID)
 
 	s.Notifier.SendPasswordChangedNotification(user.Email, user.Name)
+	return nil
+}
+
+func (s *AuthService) RequestEmailChange(userID, newEmail string) error {
+	user, err := s.GetUser(userID)
+	if err != nil {
+		return errors.New("user not found")
+	}
+
+	if user.Email == newEmail {
+		return errors.New("this is already your current email address")
+	}
+
+	// Generate token
+	token := fmt.Sprintf("%d", time.Now().UnixNano())
+	expiry := time.Now().Add(1 * time.Hour).Unix()
+
+	// Save to DB
+	if err := database.SetPendingEmail(s.Mongo, userID, newEmail, token, expiry); err != nil {
+		return err
+	}
+
+	// Send to NEW email
+	s.Notifier.SendEmailChangeVerification(newEmail, user.Name, token)
+	return nil
+}
+
+func (s *AuthService) VerifyEmailChange(token string) error {
+	user, err := database.GetUserByEmailChangeToken(s.Mongo, token)
+	if err != nil {
+		return err
+	}
+
+	if time.Now().Unix() > user.EmailChangeTokenExpiry {
+		return errors.New("verification link has expired")
+	}
+
+	oldEmail := user.Email
+	newEmail := user.PendingEmail
+
+	// Apply change
+	if err := database.ConfirmEmailChange(s.Mongo, user.ID, newEmail); err != nil {
+		return err
+	}
+
+	// Notify OLD email about the successful change
+	s.Notifier.SendEmailChangedNotification(oldEmail, newEmail, user.Name)
 	return nil
 }
