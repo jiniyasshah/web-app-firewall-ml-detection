@@ -126,20 +126,16 @@ class RequestData(BaseModel):
     length: int
     headers: dict = {}
 
-# --- 4. Heuristic Scorer (Generic) ---
-def calculate_heuristic_score(content):
-    # This penalizes (;), ((), etc. Good for Body/SQL, BAD for User-Agents.
-    suspicious_chars = {
-        "'": 0.15, '"': 0.10, "<": 0.15, ">": 0.15, ";": 0.10, "--": 0.20,
-        "(": 0.05, ")": 0.05, "$": 0.10, "`": 0.10, "union": 0.30, "select": 0.20,
-        "{": 0.10, "}": 0.10
-    }
+def calculate_heuristic_score(text):
     score = 0.0
-    content_lower = content.lower()
-    for char, weight in suspicious_chars.items():
-        if char in content_lower:
-            score += (weight * content_lower.count(char))
-    return min(score, 0.60)
+    text_lower = text.lower()
+    suspicious_keywords = ['union', 'select', 'insert', 'drop', 'script', 'alert', 'onerror']
+    for kw in suspicious_keywords:
+        if kw in text_lower:
+            score += 0.15  
+    if score > 0.5:
+        score = 0.5 
+    return score
 
 
 @app.get("/health")
