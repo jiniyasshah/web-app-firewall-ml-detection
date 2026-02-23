@@ -100,9 +100,13 @@ def dissect_payload(path, body, headers):
             
             # 2. Skip Cloudflare Fingerprinting Headers (Save CPU & reduce noise)
             if key_lower.startswith("cf-") or key_lower.startswith("cdn-"):
-                continue          
+                continue    
+            
+            # 3. Skip Common Bot Headers (Save CPU & reduce noise)
+            if key_lower.startswith("accept-"):
+                continue         
 
-            # 3. Skip Cache/Priority
+            # 5. Skip Cache/Priority
             if key_lower in ["priority", "cache-control", "pragma"]:
                 continue
 
