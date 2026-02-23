@@ -61,6 +61,12 @@ func main() {
         log.Println("⚠️ Warning: pages/captcha.html not found. DDoS challenges will fail.")
     }
 
+	page403, err := os.ReadFile("pages/403.html")
+	if err != nil {
+		log.Println("⚠️ Warning: Could not read pages/403.html")
+		page403 = []byte("WAF Blocked: Access Denied") // Fallback
+	}
+
 	// 4. Initialize Services
 	// [UPDATED] Pass notificationService to AuthService
 	authService := service.NewAuthService(mongoClient, cfg, notificationService) 
@@ -71,7 +77,7 @@ func main() {
 
 	// 5. Initialize Proxy
 	reverseProxy := proxy.NewReverseProxy(wafService, page502)
-	wafHandler := proxy.NewWAFHandler(wafService, reverseProxy, rateLimiter, cfg, page404, captchaPage)
+	wafHandler := proxy.NewWAFHandler(wafService, reverseProxy, rateLimiter, cfg, page404, captchaPage, page403)
 	
 	// [NEW] Inject Notifier into WAF Handler for security alerts
 	wafHandler.Notifier = notificationService

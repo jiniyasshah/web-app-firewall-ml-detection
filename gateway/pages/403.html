@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Request Blocked | Minishield WAF</title>
+    <style>
+      body {
+        background-color: #0f172a;
+        color: #e2e8f0;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        margin: 0;
+      }
+      .container {
+        text-align: center;
+        max-width: 600px;
+        padding: 2rem;
+        border: 1px solid #1e293b;
+        border-radius: 12px;
+        background: #1e293b;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        color: #f43f5e;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+      }
+      p {
+        color: #94a3b8;
+        margin-bottom: 1.5rem;
+        line-height: 1.5;
+      }
+      .details-box {
+        background: #0f172a;
+        padding: 1rem;
+        border-radius: 8px;
+        text-align: left;
+        margin-bottom: 2rem;
+        border: 1px solid #334155;
+      }
+      .details-box p {
+        margin: 0.5rem 0;
+        font-size: 0.9rem;
+        color: #cbd5e1;
+      }
+      .label {
+        font-weight: 600;
+        color: #38bdf8;
+        display: inline-block;
+        width: 80px;
+      }
+      .value {
+        font-family: monospace;
+      }
+      .footer {
+        margin-top: 2rem;
+        font-size: 0.875rem;
+        color: #64748b;
+      }
+      .icon {
+        width: 32px;
+        height: 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>
+        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+        Access Denied
+      </h1>
+      <p>
+        Your request to <strong>{{DOMAIN}}</strong> was blocked by the Minishield Web Application Firewall because it matched a security policy.
+      </p>
+      
+      <div class="details-box">
+        <p><span class="label">Reason:</span> <span class="value" style="color: #f43f5e;">{{REASON}}</span></p>
+        <p><span class="label">Client IP:</span> <span class="value">{{IP}}</span></p>
+        <p><span class="label">Event ID:</span> <span class="value">{{REQ_ID}}</span></p>
+      </div>
+
+      <p style="font-size: 0.875rem;">
+        If you believe this is a false positive, please contact the site owner and provide the Event ID above.
+      </p>
+      <div class="footer">Protected by Minishield WAF</div>
+    </div>
+  </body>
+</html>

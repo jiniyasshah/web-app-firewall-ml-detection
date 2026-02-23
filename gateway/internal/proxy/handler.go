@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -40,7 +41,8 @@ type WAFHandler struct {
 	Cfg         *config.Config
 
 	UnconfiguredPage []byte
-	CaptchaPage      []byte // [NEW] Stores the raw HTML for the captcha
+	CaptchaPage      []byte // Stores the raw HTML for the captcha
+	BlockedPage      []byte
 
 	// [NEW] Store IPs that solved the captcha
 	// Key: IP string, Value: Expiration Time
@@ -58,7 +60,7 @@ type WAFHandler struct {
 }
 
 // [UPDATED] Added captchaPage argument
-func NewWAFHandler(svc *service.WAFService, proxy *httputil.ReverseProxy, rl *limiter.RateLimiter, cfg *config.Config, page404 []byte, captchaPage []byte) *WAFHandler {
+func NewWAFHandler(svc *service.WAFService, proxy *httputil.ReverseProxy, rl *limiter.RateLimiter, cfg *config.Config, page404 []byte, captchaPage []byte, page403 []byte) *WAFHandler {
 	ddosLimiter := limiter.New(cfg.DDOSLimit, 1*time.Minute)
 	
 	// Start background cleanup for Verified IPs (Prevent Memory Leaks)
@@ -70,6 +72,7 @@ func NewWAFHandler(svc *service.WAFService, proxy *httputil.ReverseProxy, rl *li
 		Cfg:              cfg,
 		UnconfiguredPage: page404,
 		CaptchaPage:      captchaPage,
+		BlockedPage:      page403,
 		// Initialize Maps
 		domainRules: make(map[string][]models.WAFRule),
 		domainMap:   make(map[string]models.Domain),
@@ -446,13 +449,10 @@ StandardChecks:
 		log.Printf("⛔ BLOCKED IP: %s | Host: %s | Reason: %s", clientIP, host, reason)
 		logger.LogAttack(domainInfo.UserID, domainInfo.ID, clientIP, r.URL.Path, reason, "Blocked", source, triggeredTags, ruleScore, confidence, fullReq, finalTrigger)
 		
-		// Trigger Notification
 		if h.Notifier != nil {
 			h.Notifier.NotifyAttack(domainInfo.UserID, host, reason, clientIP)
 		}
-		
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("WAF Blocked: " + reason))
+		h.serveBlockedPage(w, r, reason)
 
 	case detector.Monitor:
 		log.Printf("⚠️ FLAGGED IP: %s | Host: %s", clientIP, host)
@@ -462,4 +462,24 @@ StandardChecks:
 	case detector.Allow:
 		h.Proxy.ServeHTTP(w, r)
 	}
+}
+
+// [NEW] Helper to render the 403 Forbidden page
+func (h *WAFHandler) serveBlockedPage(w http.ResponseWriter, r *http.Request, reason string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden) // Send true 403 status code
+
+	host := getHost(r)
+	clientIP := getRealIP(r)
+	reqID := fmt.Sprintf("REQ-%d", time.Now().UnixNano())
+	
+	page := string(h.BlockedPage)
+	
+	// Inject Dynamic Values
+	page = strings.Replace(page, "{{DOMAIN}}", host, -1)
+	page = strings.Replace(page, "{{REASON}}", reason, -1)
+	page = strings.Replace(page, "{{IP}}", clientIP, -1)
+	page = strings.Replace(page, "{{REQ_ID}}", reqID, -1)
+
+	w.Write([]byte(page))
 }
