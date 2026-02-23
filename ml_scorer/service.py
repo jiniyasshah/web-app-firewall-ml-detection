@@ -187,9 +187,12 @@ def predict(data: RequestData):
         if is_short and is_alphanum:
             continue
 
-        # A. ML Analysis (Always Run)
-        pred_label = model.predict([content])[0]
-        probs = model.predict_proba([content])[0]
+        squashed_content = re.sub(r'/\*.*?\*/', '', content)
+        squashed_content = re.sub(r'\s+', '', squashed_content)
+
+        # A. ML Analysis (Run against the SQUASHED content)
+        pred_label = model.predict([squashed_content])[0]
+        probs = model.predict_proba([squashed_content])[0]
         ml_confidence = probs[list(model.classes_).index(pred_label)]
         
         if pred_label == "Normal":
@@ -201,15 +204,10 @@ def predict(data: RequestData):
         heuristic_boost = 0.0
         
         if "user-agent" in source.lower():
-            # 🟢 BYPASS: Do NOT run heuristic scorer on User-Agents.
-            # Normal browsers have ";" and "(". 
-            # Bad bots are already blocked by Go Rules.
-            # We trust the ML model alone for subtle UA anomalies.
             heuristic_boost = 0.0 
         else:
-            # 🔴 ENFORCE: Run heuristic scorer on Body/Path.
-            # Semicolons here are still suspicious (SQLi).
-            heuristic_boost = calculate_heuristic_score(content)
+            # Run heuristic against SQUASHED content!
+            heuristic_boost = calculate_heuristic_score(squashed_content)
 
         # C. Final Calculation
         final_risk = ml_risk + heuristic_boost
@@ -220,11 +218,12 @@ def predict(data: RequestData):
         
         if final_risk > max_risk_score:
             max_risk_score = final_risk
+            # Return the original payload so the dashboard shows the real attack
             trigger_content = content 
             
             if pred_label != "Normal":
                 clean_label = pred_label.replace("malicious(", "").replace(")", "").upper()
-                detected_type = "ML_" + clean_label 
+                detected_type = "ML_" + clean_label
 
     return {
         "is_anomaly": is_anomaly,
