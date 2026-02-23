@@ -16,7 +16,7 @@ import (
 	"web-app-firewall-ml-detection/internal/logger"
 	"web-app-firewall-ml-detection/internal/proxy"
 	"web-app-firewall-ml-detection/internal/service"
-	"web-app-firewall-ml-detection/internal/utils" // [NEW] Import Utils
+	"web-app-firewall-ml-detection/internal/utils"
 
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -42,7 +42,7 @@ func main() {
 	logger.Init(mongoClient, "waf")
 	rateLimiter := limiter.New(100, 1*time.Minute)
 
-	// [NEW] Initialize Email & Notification Service
+	// Initialize Email & Notification Service
 	emailSender := utils.NewEmailSender(cfg)
 	notificationService := service.NewNotificationService(emailSender, mongoClient)
 
@@ -57,9 +57,9 @@ func main() {
 	}
 
 	captchaPage, _ := os.ReadFile("pages/captcha.html")
-    if len(captchaPage) == 0 {
-        log.Println("⚠️ Warning: pages/captcha.html not found. DDoS challenges will fail.")
-    }
+	if len(captchaPage) == 0 {
+		log.Println("⚠️ Warning: pages/captcha.html not found. DDoS challenges will fail.")
+	}
 
 	page403, err := os.ReadFile("pages/403.html")
 	if err != nil {
@@ -68,7 +68,6 @@ func main() {
 	}
 
 	// 4. Initialize Services
-	// [UPDATED] Pass notificationService to AuthService
 	authService := service.NewAuthService(mongoClient, cfg, notificationService) 
 	wafService := service.NewWAFService(mongoClient, cfg)
 	domainService := service.NewDomainService(mongoClient)
@@ -79,7 +78,7 @@ func main() {
 	reverseProxy := proxy.NewReverseProxy(wafService, page502)
 	wafHandler := proxy.NewWAFHandler(wafService, reverseProxy, rateLimiter, cfg, page404, captchaPage, page403)
 	
-	// [NEW] Inject Notifier into WAF Handler for security alerts
+	// Inject Notifier into WAF Handler for security alerts
 	wafHandler.Notifier = notificationService
 
 	// 6. Initialize Handlers
@@ -111,6 +110,52 @@ func main() {
 		HostPolicy: hostPolicy,
 		Cache:      autocert.DirCache("certs"),
 	}
+
+	// =========================================================
+	// [NEW] BACKGROUND TRAFFIC HISTORY WORKER (Runs 24/7)
+	// =========================================================
+	go func() {
+		var prevTotal int64
+		var prevThreats int64
+		isFirst := true
+
+		ticker := time.NewTicker(5 * time.Second) // Poll every 5 seconds
+		for range ticker.C {
+			domains, err := database.GetAllDomains(mongoClient) // Fetch current stats
+			if err != nil {
+				continue
+			}
+
+			var currentTotal, currentThreats int64
+			for _, d := range domains {
+				currentTotal += d.Stats.TotalRequests
+				currentThreats += d.Stats.BlockedRequests + d.Stats.FlaggedRequests
+			}
+
+			if isFirst {
+				prevTotal = currentTotal
+				prevThreats = currentThreats
+				isFirst = false
+				database.RecordTrafficHistory(mongoClient, 0, 0)
+				continue
+			}
+
+			// Calculate Delta
+			deltaTotal := currentTotal - prevTotal
+			if deltaTotal < 0 { deltaTotal = 0 }
+			
+			deltaThreats := currentThreats - prevThreats
+			if deltaThreats < 0 { deltaThreats = 0 }
+
+			// Update Previous
+			prevTotal = currentTotal
+			prevThreats = currentThreats
+
+			// Save to MongoDB
+			database.RecordTrafficHistory(mongoClient, deltaTotal, deltaThreats)
+		}
+	}()
+	// =========================================================
 
 	// 9. Start Servers
 	go func() {

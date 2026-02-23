@@ -29,6 +29,9 @@ func NewRouter(
 	mux.HandleFunc("/api/auth/login", authHandler.Login)
 	mux.HandleFunc("/api/auth/logout", authHandler.Logout)
 	mux.HandleFunc("/api/system/status", systemHandler.GetSystemStatus)
+	mux.HandleFunc("/api/system/traffic-history", authHandler.Middleware(systemHandler.GetTrafficHistory))
+
+
 	mux.HandleFunc("/api/auth/check", authHandler.Middleware(authHandler.CheckAuth))
 	mux.HandleFunc("/api/auth/verify", authHandler.VerifyEmail)
 	mux.HandleFunc("/api/auth/email/update", authHandler.Middleware(authHandler.RequestEmailChange))

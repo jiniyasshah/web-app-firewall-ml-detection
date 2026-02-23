@@ -135,3 +135,10 @@ type AttackLog struct {
 	Request        FullRequest `bson:"request" json:"request"`
 	TriggerPayload string      `bson:"trigger_payload" json:"trigger_payload"`
 }
+
+type TrafficHistory struct {
+	ID        string      `bson:"_id,omitempty" json:"id"`
+	Timestamp time.Time   `bson:"timestamp" json:"timestamp"`
+	Total     int64       `bson:"total" json:"total"`
+	Threats   int64       `bson:"threats" json:"threats"`
+}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"runtime"
 	"time"
+	"web-app-firewall-ml-detection/internal/database"
 
 	"web-app-firewall-ml-detection/internal/config"
 	"web-app-firewall-ml-detection/internal/proxy"
@@ -133,4 +134,31 @@ func (h *SystemHandler) fetchRemoteHealth(baseURL string) ComponentStatus {
 		Memory:  pythonStats.Memory,
 		Network: pythonStats.Network,
 	}
+}
+
+//  Endpoint to serve the graph data
+func (h *SystemHandler) GetTrafficHistory(w http.ResponseWriter, r *http.Request) {
+	// Fetch the last 20 ticks (100 seconds of history)
+	history, err := database.GetTrafficHistory(h.MongoClient, 20)
+	if err != nil {
+		utils.WriteError(w, "Failed to fetch traffic history", http.StatusInternalServerError)
+		return
+	}
+
+	type GraphPoint struct {
+		Time    string `json:"time"`
+		Total   int64  `json:"total"`
+		Threats int64  `json:"threats"`
+	}
+
+	var points []GraphPoint
+	for _, h := range history {
+		points = append(points, GraphPoint{
+			Time:    h.Timestamp.Format("15:04:05"), // Formats to HH:MM:SS
+			Total:   h.Total,
+			Threats: h.Threats,
+		})
+	}
+
+	utils.WriteSuccess(w, points, http.StatusOK)
 }

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"time"
 	"web-app-firewall-ml-detection/internal/models"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -75,4 +76,49 @@ func GetLogs(client *mongo.Client, domainID string, page, limit int, action, ip,
 	}
 
 	return logs, totalFiltered, totalEvents, blockedCount, flaggedCount, nil
+}
+
+// Saves a 5-second snapshot of traffic
+func RecordTrafficHistory(client *mongo.Client, total, threats int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	collection := client.Database(DBName).Collection("traffic_history")
+	entry := models.TrafficHistory{
+		Timestamp: time.Now(),
+		Total:     total,
+		Threats:   threats,
+	}
+	_, err := collection.InsertOne(ctx, entry)
+	return err
+}
+
+// Fetches the last N data points for the graph
+func GetTrafficHistory(client *mongo.Client, limit int) ([]models.TrafficHistory, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
+	defer cancel()
+
+	collection := client.Database(DBName).Collection("traffic_history")
+	
+	findOptions := options.Find()
+	findOptions.SetSort(bson.D{{Key: "timestamp", Value: -1}}) // Get newest first
+	findOptions.SetLimit(int64(limit))
+
+	cursor, err := collection.Find(ctx, bson.M{}, findOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var history []models.TrafficHistory
+	if err = cursor.All(ctx, &history); err != nil {
+		return nil, err
+	}
+
+	// Reverse the array so it goes left-to-right (oldest to newest) on the frontend graph
+	for i, j := 0, len(history)-1; i < j; i, j = i+1, j-1 {
+		history[i], history[j] = history[j], history[i]
+	}
+
+	return history, nil
 }
