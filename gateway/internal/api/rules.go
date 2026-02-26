@@ -89,3 +89,24 @@ func (h *RuleHandler) Toggle(w http.ResponseWriter, r *http.Request) {
     
 	utils.WriteMessage(w, "Rule updated", http.StatusOK)
 }
+
+func (h *RuleHandler) DeleteCustom(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("user_id").(string)
+	ruleID := r.URL.Query().Get("id")
+
+	if ruleID == "" {
+		utils.WriteError(w, "Rule ID required", http.StatusBadRequest)
+		return
+	}
+
+	// The Service and DB layers already have DeleteRule implemented!
+	if err := h.Service.DeleteRule(ruleID, userID); err != nil {
+		utils.WriteError(w, "Failed to delete rule. It may not exist.", http.StatusInternalServerError)
+		return
+	}
+
+	// Reload the WAF memory cache so the engine stops enforcing the deleted rule
+	go h.WAF.ReloadRules()
+
+	utils.WriteMessage(w, "Rule deleted successfully", http.StatusOK)
+}

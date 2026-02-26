@@ -54,6 +54,7 @@ func NewRouter(
 	mux.HandleFunc("/api/rules/global", authHandler.Middleware(ruleHandler.GetGlobal))
 	mux.HandleFunc("/api/rules/custom", authHandler.Middleware(ruleHandler.GetCustom))
 	mux.HandleFunc("/api/rules/custom/add", authHandler.Middleware(ruleHandler.AddCustom))
+	mux.HandleFunc("/api/rules/custom/delete", authHandler.Middleware(ruleHandler.DeleteCustom))
 	mux.HandleFunc("/api/rules/toggle", authHandler.Middleware(ruleHandler.Toggle))
 
 	// --- Log Routes ---
