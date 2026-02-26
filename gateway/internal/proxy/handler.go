@@ -426,7 +426,7 @@ StandardChecks:
 	}
 
 	// Track Stats
-	isFlagged := (verdict == detector.Block || verdict == detector.Monitor)
+	isFlagged := (verdict == detector.Monitor)
 	isBlocked := (verdict == detector.Block)
 	h.Service.TrackRequest(domainInfo.ID, isFlagged, isBlocked)
 
