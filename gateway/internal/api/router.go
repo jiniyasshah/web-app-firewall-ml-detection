@@ -59,7 +59,7 @@ func NewRouter(
 
 	// --- Log Routes ---
 	mux.HandleFunc("/api/logs", authHandler.Middleware(logHandler.GetLogs))
-	mux.HandleFunc("/api/logs/stream", logHandler.SSEHandler) // SSE usually doesn't use standard Auth header middleware
+	mux.HandleFunc("/api/logs/stream", authHandler.Middleware(logHandler.SSEHandler)) // SSE usually doesn't use standard Auth header middleware
 
 
 	return middleware.CORS(cfg)(mux)

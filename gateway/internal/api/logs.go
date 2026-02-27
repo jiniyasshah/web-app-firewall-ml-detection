@@ -28,25 +28,27 @@ type PaginatedLogsResponse struct {
 	Page        int                `json:"page"`
 	Limit       int                `json:"limit"`
 	TotalPages  int                `json:"total_pages"`
-	TotalEvents int64              `json:"total_events"` // [NEW]
-	Blocked     int64              `json:"blocked"`      // [NEW]
-	Flagged     int64              `json:"flagged"`      // [NEW]
+	TotalEvents int64              `json:"total_events"` 
+	Blocked     int64              `json:"blocked"`      
+	Flagged     int64              `json:"flagged"`      
 }
 
 func (h *LogHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	// [SECURITY FIX] Extract the authenticated user's ID
+	userID := r.Context().Value("user_id").(string)
+
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 { page = 1 }
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit < 1 || limit > 100 { limit = 20 }
 
-	// Read new filters from URL
 	domainID := r.URL.Query().Get("domain_id")
 	action := r.URL.Query().Get("action")
 	ip := r.URL.Query().Get("ip")
-    source := r.URL.Query().Get("source")
+	source := r.URL.Query().Get("source")
 
-	// [UPDATED] Pass source to GetLogs
-	logs, totalFiltered, totalEvents, blocked, flagged, err := database.GetLogs(h.MongoClient, domainID, page, limit, action, ip, source)
+	// [SECURITY FIX] Pass userID down to the database layer
+	logs, totalFiltered, totalEvents, blocked, flagged, err := database.GetLogs(h.MongoClient, userID, domainID, page, limit, action, ip, source)
 	if err != nil {
 		utils.WriteError(w, "Failed to fetch logs", http.StatusInternalServerError)
 		return
@@ -63,23 +65,29 @@ func (h *LogHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		Page:        page,
 		Limit:       limit,
 		TotalPages:  totalPages,
-		TotalEvents: totalEvents, // Include accurate stats
-		Blocked:     blocked,     // Include accurate stats
-		Flagged:     flagged,     // Include accurate stats
+		TotalEvents: totalEvents, 
+		Blocked:     blocked,     
+		Flagged:     flagged,     
 	}
 
 	utils.WriteSuccess(w, response, http.StatusOK)
 }
 
 func (h *LogHandler) SSEHandler(w http.ResponseWriter, r *http.Request) {
-	// SSE headers
+	// [SECURITY FIX] Ensure SSE is only accessible by authenticated users
+	// Note: Make sure your router wraps SSEHandler in AuthMiddleware!
+	userID, ok := r.Context().Value("user_id").(string)
+	if !ok || userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
 	logsCh := logger.GetBroadcastChannel()
 	
-	// Flush immediately to establish connection
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
@@ -87,10 +95,13 @@ func (h *LogHandler) SSEHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case entry := <-logsCh:
-			data, _ := json.Marshal(entry)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
+			// [SECURITY FIX] Only broadcast the log if it belongs to this connected user
+			if entry.UserID == userID {
+				data, _ := json.Marshal(entry)
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
 			}
 		case <-r.Context().Done():
 			return

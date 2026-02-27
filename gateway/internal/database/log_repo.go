@@ -11,13 +11,16 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func GetLogs(client *mongo.Client, domainID string, page, limit int, action, ip, source string) ([]models.AttackLog, int64, int64, int64, int64, error) {
+func GetLogs(client *mongo.Client, userID string, domainID string, page, limit int, action, ip, source string) ([]models.AttackLog, int64, int64, int64, int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), TimeoutDuration)
 	defer cancel()
 
 	collection := client.Database(DBName).Collection("logs")
 
-	baseFilter := bson.M{}
+	// [SECURITY FIX] Hardcode the userID into the base filter. 
+	// This makes cross-tenant data leaks impossible.
+	baseFilter := bson.M{"user_id": userID}
+	
 	if domainID != "" && domainID != "all" {
 		baseFilter["domain_id"] = domainID
 	}
@@ -31,16 +34,12 @@ func GetLogs(client *mongo.Client, domainID string, page, limit int, action, ip,
 		queryFilter["action"] = action
 	}
 	if ip != "" {
-		// [FIXED] Changed "ip_address" to "ip" to match your MongoDB schema!
 		queryFilter["ip"] = bson.M{"$regex": primitive.Regex{Pattern: ip, Options: "i"}}
 	}
 	
-	// [UPDATED] Filter by Source instead of Attack Type
 	if source != "" && source != "All" {
 		queryFilter["source"] = source 
 	}
-
-	// ... rest of the function remains exactly the same ...
 	totalEvents, _ := collection.CountDocuments(ctx, baseFilter)
 
 	blockedFilter := bson.M{"action": "Blocked"}
